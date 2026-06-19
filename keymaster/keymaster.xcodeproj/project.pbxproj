@@ -36,6 +36,9 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		DA7B8B412FE580C600AB4D8F /* keymaster */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				DA7B8BBD2FE5BC6900AB4D8F /* PBXFileSystemSynchronizedBuildFileExceptionSet */,
+			);
 			path = keymaster;
 			sourceTree = "<group>";
 		};
@@ -50,6 +53,16 @@
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		DA7B8BBD2FE5BC6900AB4D8F /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				RunSupport.swift,
+			);
+			target = DA7B8B4B2FE580C700AB4D8F /* keymasterTests */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		DA7B8B3C2FE580C600AB4D8F /* Frameworks */ = {
