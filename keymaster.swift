@@ -58,32 +58,34 @@ func setPassword(key: String, secret: Data) -> OSStatus {
   return SecItemUpdate(matchQuery as CFDictionary, attributes as CFDictionary)
 }
 
-func deletePassword(key: String) -> Bool {
-let query: [String: Any] = [
-    kSecClass as String: kSecClassGenericPassword,
-    kSecAttrService as String: key,
-    kSecMatchLimit as String: kSecMatchLimitOne
-  ]
-  let status = SecItemDelete(query as CFDictionary)
-  return status == errSecSuccess
-}
-
-func getPassword(key: String) -> String? {
+// Delete a biometric-protected secret. The bound LAContext makes the Keychain
+// present a Touch ID prompt naming the requested key. Returns the raw OSStatus
+// so the caller can report real failures.
+func deletePassword(key: String) -> OSStatus {
   let query: [String: Any] = [
     kSecClass as String: kSecClassGenericPassword,
-    kSecAttrService as String: key,
+    kSecAttrService as String: servicePrefix + key,
+    kSecAttrAccount as String: account,
+    kSecUseAuthenticationContext as String: authContext(verb: "Delete", key: key)
+  ]
+  return SecItemDelete(query as CFDictionary)
+}
+
+// Read a biometric-protected secret. The bound LAContext makes the Keychain
+// present a Touch ID prompt naming the requested key. Returns the raw OSStatus
+// alongside the secret data (nil unless the status is success).
+func getPassword(key: String) -> (OSStatus, Data?) {
+  let query: [String: Any] = [
+    kSecClass as String: kSecClassGenericPassword,
+    kSecAttrService as String: servicePrefix + key,
+    kSecAttrAccount as String: account,
     kSecMatchLimit as String: kSecMatchLimitOne,
-    kSecReturnData as String: true
+    kSecReturnData as String: true,
+    kSecUseAuthenticationContext as String: authContext(verb: "Read", key: key)
   ]
   var item: CFTypeRef?
   let status = SecItemCopyMatching(query as CFDictionary, &item)
-
-  guard status == errSecSuccess,
-    let passwordData = item as? Data,
-    let password = String(data: passwordData, encoding: String.Encoding.utf8)
-  else { return nil }
-
-  return password
+  return (status, item as? Data)
 }
 
 func usage() {
@@ -127,7 +129,11 @@ func main() {
   if action == "get" {
     context.evaluatePolicy(policy, localizedReason: "access to your password") { success, error in
       if success && error == nil {
-        guard let password = getPassword(key: key) else {
+        let (status, data) = getPassword(key: key)
+        guard status == errSecSuccess,
+          let data = data,
+          let password = String(data: data, encoding: String.Encoding.utf8)
+        else {
           print("Error getting password")
           exit(EXIT_FAILURE)
         }
@@ -145,7 +151,7 @@ func main() {
   if action == "delete" {
     context.evaluatePolicy(policy, localizedReason: "delete your password") { success, error in
       if success && error == nil {
-        guard deletePassword(key: key) else {
+        guard deletePassword(key: key) == errSecSuccess else {
           print("Error deleting password")
           exit(EXIT_FAILURE)
         }
