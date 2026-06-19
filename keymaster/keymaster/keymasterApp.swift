@@ -230,7 +230,7 @@ struct Keymaster: ParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "keymaster",
     abstract: "Store and retrieve Keychain secrets guarded by Touch ID.",
-    subcommands: [Set.self, Get.self, Remove.self]
+    subcommands: [Set.self, Get.self, Remove.self, Run.self]
   )
 }
 
@@ -284,6 +284,70 @@ extension Keymaster {
       let status = removePassword(key: key)
       guard status == errSecSuccess else { failKeychain(status) }
       print("Key \"\(key)\" has been removed from the keychain")
+    }
+  }
+
+  // Run a command with keychain secrets injected as environment variables, all
+  // unlocked by a SINGLE Touch ID prompt. Each `--key` names a secret to read and
+  // the env var to inject it as (see parseKeyMapping); the trailing command after
+  // `--` is exec'd with those vars merged over the current environment. Any
+  // unreadable key aborts before the command runs, so it never launches with a
+  // silently-missing secret.
+  struct Run: ParsableCommand {
+    static let configuration = CommandConfiguration(
+      abstract: "Run a command with keychain secrets injected as env vars (one Touch ID prompt)."
+    )
+
+    @Option(
+      name: .customLong("key"),
+      help: ArgumentHelp(
+        "Secret to inject. \"NAME\" sets env NAME from key NAME; \"ENV=key\" sets env ENV from key 'key'. Repeatable.",
+        valueName: "NAME|ENV=key"
+      )
+    )
+    var keys: [String]
+
+    @Argument(
+      parsing: .postTerminator,
+      help: ArgumentHelp(
+        "The command to run, after `--`, e.g. -- ./deploy.sh --flag.",
+        valueName: "-- command [args...]"
+      )
+    )
+    var command: [String]
+
+    // Rules that don't touch the keychain live here (and in parseKeyMapping) so a
+    // malformed invocation is rejected before any Touch ID prompt or exec.
+    func validate() throws {
+      guard !keys.isEmpty else {
+        throw ValidationError("provide at least one --key")
+      }
+      guard !command.isEmpty else {
+        throw ValidationError("provide a command after --")
+      }
+      for raw in keys { _ = try parseKeyMapping(raw) }
+    }
+
+    func run() {
+      // validate() already proved every --key parses, so this cannot throw.
+      let mappings = keys.compactMap { try? parseKeyMapping($0) }
+      let program = command.first ?? ""
+      let names = mappings.map { "\"\($0.key)\"" }.joined(separator: ", ")
+      let reason = "Run \"\(program)\" with keychain secrets: \(names)"
+      // One prompt for the whole batch; nil means the user canceled or auth failed.
+      guard let context = authenticatedContext(reason: reason) else {
+        fail("Touch ID authentication failed or was canceled")
+      }
+      // Read every secret through that one pre-authenticated context (no further
+      // prompts), aborting before exec if any read fails — envSecret exits naming
+      // the offending key. Last write wins for a duplicated env name.
+      var injected: [String: String] = [:]
+      for mapping in mappings {
+        let (status, data) = readItem(key: mapping.key, context: context)
+        injected[mapping.env] = envSecret(forKey: mapping.key, status: status, data: data)
+      }
+      // Qualify exit so it resolves to libc's, not ParsableCommand.exit(withError:).
+      Foundation.exit(runProcess(command: command, extraEnv: injected))
     }
   }
 }
