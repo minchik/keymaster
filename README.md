@@ -1,6 +1,6 @@
 # Keymaster
 
-Keymaster is a small binary written in Swift that lets scripts store and read macOS Keychain secrets guarded by Touch ID.
+Keymaster lets scripts store and read macOS Keychain secrets guarded by Touch ID.
 
 Macs come with the `security` command which can get and set secrets in the Keychain:
 
@@ -15,15 +15,26 @@ security find-generic-password -s "MyKeyName" -w
 
 You can use `security` in a script, but (AFAIK) you can't tell it to guard secrets with biometrics — you have to enter the password each time, or "always allow" the `security` binary to access the secret. "Always allow" is exactly the weakening you don't want: it lets any process running as you read the plaintext with no challenge.
 
-🔑 Keymaster fixes this. Each secret is stored with a biometric access-control object (`.biometryAny`), so the **Keychain itself** challenges for Touch ID on every read, overwrite, and delete. Enforcement is a property of the stored item, not of this program's control flow — there is no "always allow" to grant, and `security find-generic-password -w` cannot return the plaintext without a biometric match.
+🔑 Keymaster fixes this. Each secret is stored in the **data-protection keychain** with a biometric access-control object (`.biometryAny`) and scoped to keymaster's own keychain access group, so:
+
+- **Reading a secret triggers a Touch ID challenge from the Keychain itself** — there is no "always allow" to grant.
+- The items are **isolated by entitlement**: only a binary signed into keymaster's access group can see them at all. Another process running as you can't read them with `security find-generic-password` — it won't even find them.
+- **Delete and overwrite are gated by Touch ID too.** The Keychain does not challenge deletion on its own (deleting doesn't decrypt the secret), so keymaster forces an authenticated read first and only proceeds when you approve.
 
 ## Building Keymaster
 
-Compile `keymaster.swift` into a binary:
+The biometric guard relies on a **restricted entitlement** (`keychain-access-groups`). macOS kills an unsigned/unprovisioned binary that carries it, so keymaster **cannot** be a plain `swiftc` binary — it must be built as a signed `.app` with your own Apple signing identity:
 
-`swiftc keymaster.swift`
+1. Open `keymaster/keymaster.xcodeproj` in Xcode.
+2. Select the **keymaster** target ▸ **Signing & Capabilities** ▸ set your **Team** (automatic signing). The **Keychain Sharing** capability is already configured with the group `dev.mnck.keymaster`.
+3. Build (⌘B). The actual CLI lives inside the app bundle at `keymaster.app/Contents/MacOS/keymaster`.
+4. Put it on your `PATH`, e.g. symlink the inner binary:
 
-Put the binary somewhere in your path.
+   ```bash
+   ln -sf "/path/to/keymaster.app/Contents/MacOS/keymaster" /usr/local/bin/keymaster
+   ```
+
+Requires a Mac with Touch ID and an Apple signing identity configured in Xcode.
 
 ## Save a secret to the keychain
 
@@ -39,7 +50,7 @@ printf %s "$SECRET" | keymaster set MyKeyName
 
 Piped input is read in full, so multi-line secrets (e.g. PEM keys) are preserved; a single trailing newline is trimmed. The interactive prompt reads one typed line. Secrets must be text (valid UTF-8), and an empty secret is rejected.
 
-Creating a brand-new key does **not** prompt for Touch ID (the biometric access control is evaluated on access, not on creation). Overwriting an existing key prompts and names the key.
+Creating a brand-new key does **not** prompt for Touch ID (the biometric access control is evaluated on access, not on creation). Overwriting an existing key **does** prompt and names the key.
 
 ## Retrieve a secret
 
@@ -51,10 +62,23 @@ A Touch ID prompt appears that **names the requested key** (e.g. `Read keychain 
 
 `keymaster delete MyKeyName`
 
-A Touch ID prompt naming the key appears before the item is removed.
+A Touch ID prompt naming the key (`Delete keychain secret: "MyKeyName"`) appears before the item is removed.
+
+## Storage details
+
+- **Keychain:** the modern data-protection keychain (`kSecUseDataProtectionKeychain`).
+- **Item:** service `dev.mnck.<key>`, account `keymaster`, access group `<TeamID>.dev.mnck.keymaster`.
+- **Accessibility:** `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly` — items never sync to iCloud and never appear in backups, and they are **destroyed if you remove your device passcode**.
+- **`.biometryAny`:** any currently-enrolled fingerprint/face can satisfy the prompt, and the item is *not* invalidated if you later add or remove an enrolled biometric.
 
 ## Migration from the previous version (breaking change)
 
-This version stores items under a new namespaced service (`dev.mnck.<key>`) with a fixed account and a biometric access control. Secrets saved by the previous keymaster use the old un-namespaced, unprotected format and will **not** be found by this version. Re-set each secret with the new build. Optionally remove the old entries via `Keychain Access.app` or `security delete-generic-password -s <oldkey>`.
+The previous keymaster stored items in the **legacy** keychain with **no biometric protection**. This version uses the data-protection keychain, so old secrets are not found and must be re-`set` with the new build.
 
-You can use `keymaster` in bash scripts or Automator Workflows, or wherever you need secure access to a secret.
+The old items are still there and are still readable by any process **with no Touch ID prompt**. Deleting them is **required** to remove that exposure, not optional:
+
+```bash
+security delete-generic-password -s <oldkey>     # repeat per old key (or use Keychain Access.app)
+```
+
+You can use `keymaster` in bash scripts or Automator Workflows, or wherever you need biometric-gated access to a secret.

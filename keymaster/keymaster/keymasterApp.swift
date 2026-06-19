@@ -1,5 +1,11 @@
-// Keymaster, access Keychain secrets guarded by TouchID
+// Keymaster, access Keychain secrets guarded by Touch ID.
 //
+// This is an .app target only so the binary can carry the
+// `keychain-access-groups` entitlement (a restricted entitlement that AMFI
+// rejects on an unsigned/unprovisioned binary). At runtime it behaves as a
+// CLI: `keymaster.app/Contents/MacOS/keymaster <set|get|delete> <key>` does
+// its Keychain work and exits before any AppKit run loop starts, so no window
+// is shown.
 import Foundation
 import LocalAuthentication
 import Security
@@ -32,11 +38,18 @@ func authContext(verb: String, key: String) -> LAContext {
 // The fields every Keychain query shares: the item class plus the namespaced
 // service and fixed account that together identify one stored secret. Each
 // operation extends this with the keys specific to add/read/delete.
+//
+// kSecUseDataProtectionKeychain pins every operation to the modern
+// data-protection keychain. The biometric access control and the
+// keychain-access-groups entitlement are only honored there; without this the
+// items would target the legacy file keychain. The single access group from
+// the entitlement is applied by default, so kSecAttrAccessGroup is not set.
 func baseQuery(for key: String) -> [String: Any] {
   [
     kSecClass as String: kSecClassGenericPassword,
     kSecAttrService as String: servicePrefix + key,
-    kSecAttrAccount as String: account
+    kSecAttrAccount as String: account,
+    kSecUseDataProtectionKeychain as String: true
   ]
 }
 
@@ -56,36 +69,39 @@ func setPassword(key: String, secret: Data) -> OSStatus {
   guard addStatus == errSecDuplicateItem else { return addStatus }
 
   // An item already exists under this service/account. Its access control can't
-  // be trusted: the namespace is not exclusive, so another same-user process
-  // could have pre-created an unprotected item (e.g. `security add-generic-
-  // password`). SecItemUpdate would preserve that weak ACL and store the new
-  // secret without biometric protection. Instead delete the existing item —
-  // which prompts Touch ID when it carries our own biometric ACL, naming the
-  // key — and re-add it so the stored secret always carries the biometric ACL.
-  var deleteQuery = baseQuery(for: key)
-  deleteQuery[kSecUseAuthenticationContext as String] = authContext(verb: "Update", key: key)
-  let deleteStatus = SecItemDelete(deleteQuery as CFDictionary)
+  // be trusted: another binary entitled to this access group could have created
+  // it with a weaker ACL, and SecItemUpdate would preserve that ACL while
+  // storing the new secret. Instead force a Touch ID prompt (an authenticated
+  // read naming the key), then delete the existing item and re-add it so the
+  // stored secret always carries our biometric ACL. SecItemDelete does not
+  // decrypt, so the read is what gates this overwrite behind Touch ID.
+  let (auth, _) = readItem(verb: "Update", key: key)
+  guard auth == errSecSuccess else { return auth }
+  let deleteStatus = SecItemDelete(baseQuery(for: key) as CFDictionary)
   guard deleteStatus == errSecSuccess else { return deleteStatus }
   return SecItemAdd(addQuery as CFDictionary, nil)
 }
 
-// Delete a biometric-protected secret. The bound LAContext makes the Keychain
-// present a Touch ID prompt naming the requested key. Returns the raw OSStatus
-// so the caller can report real failures.
+// Delete a biometric-protected secret. SecItemDelete does not decrypt the item,
+// so the biometric ACL would not challenge it on its own; we first force a Touch
+// ID prompt with an authenticated read and delete only when the user approves.
+// Returns the raw OSStatus so the caller can report real failures.
 func deletePassword(key: String) -> OSStatus {
-  var query = baseQuery(for: key)
-  query[kSecUseAuthenticationContext as String] = authContext(verb: "Delete", key: key)
-  return SecItemDelete(query as CFDictionary)
+  let (auth, _) = readItem(verb: "Delete", key: key)
+  guard auth == errSecSuccess else { return auth }
+  return SecItemDelete(baseQuery(for: key) as CFDictionary)
 }
 
-// Read a biometric-protected secret. The bound LAContext makes the Keychain
-// present a Touch ID prompt naming the requested key. Returns the raw OSStatus
-// alongside the secret data (nil unless the status is success).
-func getPassword(key: String) -> (OSStatus, Data?) {
+// Read the item, forcing a Touch ID challenge whose prompt names the key and
+// uses `verb` (e.g. "Read", "Delete", "Update"). The biometric ACL only
+// challenges on decryption, so this read is also what gates delete/overwrite:
+// those callers run it first and proceed only when it returns errSecSuccess.
+// Returns the raw OSStatus alongside the secret data (nil unless success).
+func readItem(verb: String, key: String) -> (OSStatus, Data?) {
   var query = baseQuery(for: key)
   query[kSecMatchLimit as String] = kSecMatchLimitOne
   query[kSecReturnData as String] = true
-  query[kSecUseAuthenticationContext as String] = authContext(verb: "Read", key: key)
+  query[kSecUseAuthenticationContext as String] = authContext(verb: verb, key: key)
   var item: CFTypeRef?
   let status = SecItemCopyMatching(query as CFDictionary, &item)
   return (status, item as? Data)
@@ -149,34 +165,35 @@ func secretString(status: OSStatus, data: Data?) -> String {
   return password
 }
 
-func main() {
-  let inputArgs = Array(CommandLine.arguments.dropFirst())
-  guard inputArgs.count == 2 else {
-    usage()
-    exit(EXIT_FAILURE)
-  }
-  let action = inputArgs[0]
-  let key = inputArgs[1]
-
-  switch action {
-  case "set":
-    guard let secret = readSecret(for: key), !secret.isEmpty else {
-      fail("no secret provided")
+@main
+struct KeymasterCLI {
+  static func main() {
+    let inputArgs = Array(CommandLine.arguments.dropFirst())
+    guard inputArgs.count == 2 else {
+      usage()
+      exit(EXIT_FAILURE)
     }
-    let status = setPassword(key: key, secret: Data(secret.utf8))
-    guard status == errSecSuccess else { failKeychain(status) }
-    print("Key \"\(key)\" has been set in the keychain")
-  case "get":
-    let (status, data) = getPassword(key: key)
-    print(secretString(status: status, data: data))
-  case "delete":
-    let status = deletePassword(key: key)
-    guard status == errSecSuccess else { failKeychain(status) }
-    print("Key \"\(key)\" has been deleted from the keychain")
-  default:
-    usage()
-    exit(EXIT_FAILURE)
+    let action = inputArgs[0]
+    let key = inputArgs[1]
+
+    switch action {
+    case "set":
+      guard let secret = readSecret(for: key), !secret.isEmpty else {
+        fail("no secret provided")
+      }
+      let status = setPassword(key: key, secret: Data(secret.utf8))
+      guard status == errSecSuccess else { failKeychain(status) }
+      print("Key \"\(key)\" has been set in the keychain")
+    case "get":
+      let (status, data) = readItem(verb: "Read", key: key)
+      print(secretString(status: status, data: data))
+    case "delete":
+      let status = deletePassword(key: key)
+      guard status == errSecSuccess else { failKeychain(status) }
+      print("Key \"\(key)\" has been deleted from the keychain")
+    default:
+      usage()
+      exit(EXIT_FAILURE)
+    }
   }
 }
-
-main()
