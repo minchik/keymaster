@@ -85,14 +85,23 @@ struct RunSupportTests {
     #expect(runProcess(command: ["/bin/sh", "-c", "kill -TERM $$"], extraEnv: [:]) == 143)
   }
 
+  // A var name that won't exist in a developer/CI shell, so the no-injection case
+  // below truly tests the unset fallback rather than inheriting an ambient value
+  // (runProcess deliberately preserves ProcessInfo.processInfo.environment).
   @Test func runInjectsExtraEnvIntoChild() {
-    // The child exits with FOO when set, so a forwarded 7 proves the var reached it.
-    #expect(runProcess(command: ["/bin/sh", "-c", "exit ${FOO:-99}"], extraEnv: ["FOO": "7"]) == 7)
+    // The child exits with the var when set, so a forwarded 7 proves it reached it.
+    #expect(runProcess(
+      command: ["/bin/sh", "-c", "exit ${KEYMASTER_TEST_VAR:-99}"],
+      extraEnv: ["KEYMASTER_TEST_VAR": "7"]
+    ) == 7)
   }
 
   @Test func runWithoutInjectionLeavesVarUnset() {
     // Same child without the override falls back to 99, confirming no leakage.
-    #expect(runProcess(command: ["/bin/sh", "-c", "exit ${FOO:-99}"], extraEnv: [:]) == 99)
+    #expect(runProcess(
+      command: ["/bin/sh", "-c", "exit ${KEYMASTER_TEST_VAR:-99}"],
+      extraEnv: [:]
+    ) == 99)
   }
 
   @Test func runResolvesBareProgramNameViaPath() {
