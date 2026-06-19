@@ -233,12 +233,32 @@ func envSecret(forKey key: String, status: OSStatus, data: Data?) -> String {
   return secret
 }
 
+// Read CFBundleShortVersionString (= MARKETING_VERSION) from the bundle. keymaster
+// ships as a signed .app and is usually run through a symlink (Homebrew puts one in
+// its bin); launched that way, Bundle.main resolves to the symlink's directory, not
+// the .app, so its Info.plist is missing. Resolve the real executable path and load
+// the bundle that actually contains it, falling back to Bundle.main when run in place.
+func marketingVersion() -> String {
+  let info: [String: Any]?
+  if let executable = Bundle.main.executableURL?.resolvingSymlinksInPath() {
+    // <app>/Contents/MacOS/keymaster -> <app>
+    let appURL = executable
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+    info = Bundle(url: appURL)?.infoDictionary ?? Bundle.main.infoDictionary
+  } else {
+    info = Bundle.main.infoDictionary
+  }
+  return info?["CFBundleShortVersionString"] as? String ?? "unknown"
+}
+
 @main
 struct Keymaster: ParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "keymaster",
     abstract: "Store and retrieve Keychain secrets guarded by Touch ID.",
-    subcommands: [Set.self, Get.self, Remove.self, Run.self]
+    subcommands: [Set.self, Get.self, Remove.self, Run.self, Version.self]
   )
 }
 
@@ -275,6 +295,20 @@ extension Keymaster {
     func run() {
       let (status, data) = readItem(verb: "Read", key: key)
       print(secretString(status: status, data: data))
+    }
+  }
+
+  // Print keymaster's version, read from the bundle by marketingVersion() (see
+  // there for why Bundle.main alone is not enough). The release workflow sets the
+  // bundle's marketing version from the git tag, so a released build reports its
+  // real version and a local build the project default.
+  struct Version: ParsableCommand {
+    static let configuration = CommandConfiguration(
+      abstract: "Print the version."
+    )
+
+    func run() {
+      print("keymaster \(marketingVersion())")
     }
   }
 
