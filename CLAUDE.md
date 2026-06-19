@@ -14,7 +14,7 @@ swiftc keymaster.swift   # produces ./keymaster
 
 ## Testing
 
-There is no automated test suite. Every command calls `LAContext.evaluatePolicy`, which shows an **interactive TouchID prompt**, so the tool cannot run headless or in CI. Verify changes by building and running `get`/`set`/`delete` by hand on a Mac and approving the prompt.
+There is no automated test suite. Biometric enforcement is a property of the stored Keychain item: each secret is written with a biometric `kSecAttrAccessControl` (`.biometryAny`), and `get`/`delete`/overwrite bind a fresh `LAContext` via `kSecUseAuthenticationContext`, so the **Keychain itself** shows an **interactive TouchID prompt** on access. (There is no standalone `LAContext.evaluatePolicy`/`dispatchMain` gate anymore — that was cosmetic.) The tool cannot run headless or in CI. Verify changes by building and running `get`/`set`/`delete` by hand on a Mac and approving the prompt. Note: creating a brand-new key via `set` does NOT prompt (the ACL is evaluated on access, not creation); overwrite/get/delete do.
 
 ## Linting
 
@@ -26,8 +26,17 @@ Indent with 2 spaces (matches existing code).
 
 ## Usage
 
+The secret is read from **stdin**, never passed as an argument (an argument would leak via `ps` and shell history, CWE-214):
+
 ```
-keymaster set <key> <secret>   # store, gated by TouchID
+keymaster set <key>            # store a secret read from stdin, gated by TouchID
 keymaster get <key>            # retrieve, gated by TouchID
 keymaster delete <key>         # remove, gated by TouchID
 ```
+
+```bash
+printf %s "$SECRET" | keymaster set MyKeyName   # piped
+keymaster set MyKeyName                          # interactive no-echo prompt
+```
+
+Items are stored under a namespaced service (`dev.mnck.<key>`) with a fixed account (`keymaster`).
