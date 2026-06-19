@@ -110,4 +110,12 @@ struct RunSupportTests {
     #expect(runProcess(command: ["false"], extraEnv: [:]) == 1)
   }
 
+  @Test func runTreatsDashLeadingProgramAsCommandNotEnvOption() {
+    // runProcess prepends "--" so /usr/bin/env stops parsing its own options. A
+    // dash-leading program name therefore reaches PATH resolution and fails as
+    // "command not found" (127) rather than as an "illegal option" env error —
+    // without the "--" this would not run at all.
+    #expect(runProcess(command: ["-keymaster-no-such-prog"], extraEnv: [:]) == 127)
+  }
+
 }

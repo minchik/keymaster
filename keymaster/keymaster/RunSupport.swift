@@ -70,7 +70,11 @@ func mergedEnvironment(
 func runProcess(command: [String], extraEnv: [String: String]) -> Int32 {
   let process = Process()
   process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-  process.arguments = command
+  // Prepend "--" so /usr/bin/env stops parsing its own options before the command.
+  // Without it, a command whose first token starts with "-" (a program literally
+  // named like "-foo", or one passed that way) is mistaken for an env option and
+  // the launch fails with "illegal option" instead of running.
+  process.arguments = ["--"] + command
   process.environment = mergedEnvironment(
     base: ProcessInfo.processInfo.environment,
     overrides: extraEnv

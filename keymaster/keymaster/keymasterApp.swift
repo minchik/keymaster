@@ -222,6 +222,14 @@ func envSecret(forKey key: String, status: OSStatus, data: Data?) -> String {
   guard let secret = String(data: data, encoding: .utf8) else {
     fail("\(key): stored secret is not valid UTF-8")
   }
+  // A POSIX environment value cannot contain an embedded NUL. UTF-8 admits one
+  // (U+0000), so it survives the decode above, but Process.run() would then abort
+  // with an uncatchable NSException from -[NSString fileSystemRepresentation]
+  // rather than a Swift error our do/catch could handle. Reject it here so the
+  // batch aborts before exec with a controlled, key-named message.
+  guard !secret.contains("\0") else {
+    fail("\(key): stored secret contains a NUL byte and cannot be used as an environment variable")
+  }
   return secret
 }
 
