@@ -6,14 +6,18 @@
 //
 
 import Testing
-@testable import keymaster
 
+// The keymasterTests bundle is HOST-LESS: it has no TEST_HOST/BUNDLE_LOADER and does
+// not `@testable import` the app. The app is a `@main` CLI that exit()s on launch, so
+// an app-hosted bundle never finishes bootstrapping (the runner exits with code 64
+// before establishing a connection). Pure logic under test is compiled directly into
+// this bundle via a synchronized-group membership exception (see RunSupport.swift).
+// See Task 1 in docs/plans/20260619-keymaster-run-subcommand.md.
 struct keymasterTests {
 
-    @Test func example() async throws {
-        // Write your test here and use APIs like `#expect(...)` to check expected conditions.
-        // Swift Testing Documentation
-        // https://developer.apple.com/documentation/testing
+    @Test func testTargetRuns() async throws {
+        // Smoke test: confirms the host-less keymasterTests target actually executes.
+        #expect(1 + 1 == 2)
     }
 
 }
