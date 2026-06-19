@@ -2,8 +2,33 @@
 //
 import Foundation
 import LocalAuthentication
+import Security
 
 let policy = LAPolicy.deviceOwnerAuthenticationWithBiometrics
+let servicePrefix = "dev.mnck."
+let account = "keymaster"
+
+// Build a biometric access-control object so the Keychain itself challenges
+// for Touch ID on every read/modify/delete. Returns nil if creation fails.
+func makeAccessControl() -> SecAccessControl? {
+  var error: Unmanaged<CFError>?
+  let accessControl = SecAccessControlCreateWithFlags(
+    nil,
+    kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly,
+    .biometryAny,
+    &error
+  )
+  guard error == nil else { return nil }
+  return accessControl
+}
+
+// Produce an LAContext whose prompt names the requested key, so a caller
+// asking for the wrong secret is visible at approval time.
+func authContext(verb: String, key: String) -> LAContext {
+  let context = LAContext()
+  context.localizedReason = "\(verb) keychain secret: \"\(key)\""
+  return context
+}
 
 func setPassword(key: String, password: String) -> Bool {
   let query: [String: Any] = [
