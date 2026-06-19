@@ -8,3 +8,6 @@ xcuserdata/
 # Xcode build output
 DerivedData/
 build/
+
+# Code-coverage artifact left in the cwd by `xcodebuild test`
+*.profraw

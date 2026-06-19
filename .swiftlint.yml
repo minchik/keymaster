@@ -2,11 +2,15 @@
 # Install: brew install swiftlint   |   Run: swiftlint
 
 included:
-  - keymaster.swift
+  - keymaster/keymaster/keymasterApp.swift
+  - keymaster/keymaster/RunSupport.swift
 
 disabled_rules:
   - todo
   - trailing_whitespace
+  # "Keymaster" is the fixed product/command name; the "master" substring is not
+  # a non-inclusive choice we control, so this rule would never be actionable.
+  - inclusive_language
 
 line_length:
   warning: 120
