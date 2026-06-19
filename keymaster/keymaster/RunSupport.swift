@@ -56,3 +56,38 @@ func mergedEnvironment(
 ) -> [String: String] {
   base.merging(overrides) { _, override in override }
 }
+
+// Run `command` (a program name or path followed by its arguments) with `extraEnv`
+// merged over the current process environment. The program is launched through
+// /usr/bin/env, so a bare name like "ls" is resolved against PATH. Stdio is
+// inherited (the child's handles are left unset, which Process inherits from us) so
+// the child talks to the terminal directly. Returns the child's exit code, or
+// 128 + signal number if it was terminated by a signal.
+//
+// On a spawn failure this prints to stderr and exits non-zero rather than calling
+// keymasterApp's `fail`: this file is also compiled into the host-less test bundle,
+// which does not include `keymasterApp.swift`, so that symbol is unavailable here.
+func runProcess(command: [String], extraEnv: [String: String]) -> Int32 {
+  let process = Process()
+  process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+  process.arguments = command
+  process.environment = mergedEnvironment(
+    base: ProcessInfo.processInfo.environment,
+    overrides: extraEnv
+  )
+  do {
+    try process.run()
+  } catch {
+    FileHandle.standardError.write(
+      Data("Error: could not run command: \(error.localizedDescription)\n".utf8)
+    )
+    exit(EXIT_FAILURE)
+  }
+  process.waitUntilExit()
+  // A signal death is reported as 128 + signo, mirroring shell convention; the
+  // raw terminationStatus carries the signal number in that case.
+  if process.terminationReason == .uncaughtSignal {
+    return 128 + process.terminationStatus
+  }
+  return process.terminationStatus
+}

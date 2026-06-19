@@ -59,4 +59,31 @@ struct RunSupportTests {
     #expect(merged["B"] == "9")
   }
 
+  // MARK: runProcess
+
+  @Test func runForwardsExitCode() {
+    #expect(runProcess(command: ["/bin/sh", "-c", "exit 7"], extraEnv: [:]) == 7)
+  }
+
+  @Test func runReportsSignalDeathAs128PlusSigno() {
+    // SIGTERM is signal 15, so a SIGTERM death is reported as 128 + 15 = 143.
+    #expect(runProcess(command: ["/bin/sh", "-c", "kill -TERM $$"], extraEnv: [:]) == 143)
+  }
+
+  @Test func runInjectsExtraEnvIntoChild() {
+    // The child exits with FOO when set, so a forwarded 7 proves the var reached it.
+    #expect(runProcess(command: ["/bin/sh", "-c", "exit ${FOO:-99}"], extraEnv: ["FOO": "7"]) == 7)
+  }
+
+  @Test func runWithoutInjectionLeavesVarUnset() {
+    // Same child without the override falls back to 99, confirming no leakage.
+    #expect(runProcess(command: ["/bin/sh", "-c", "exit ${FOO:-99}"], extraEnv: [:]) == 99)
+  }
+
+  @Test func runResolvesBareProgramNameViaPath() {
+    // /usr/bin/env resolves a bare name against PATH, so "true"/"false" run directly.
+    #expect(runProcess(command: ["true"], extraEnv: [:]) == 0)
+    #expect(runProcess(command: ["false"], extraEnv: [:]) == 1)
+  }
+
 }
