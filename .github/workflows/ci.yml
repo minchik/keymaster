@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_call:   # invoked by release.yml so a release can't ship without green tests
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-15
+    env:
+      PROJECT: keymaster/keymaster.xcodeproj
+      SCHEME: keymaster
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      # Only keymasterTests is host-less and signing-free; CODE_SIGNING_ALLOWED=NO
+      # lets the scheme build on a runner with no Developer ID cert or profile.
+      - name: Run unit tests
+        run: |
+          xcodebuild test \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -destination 'platform=macOS' \
+            -only-testing:keymasterTests \
+            CODE_SIGNING_ALLOWED=NO
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Official pinned image; entrypoint is /usr/bin/swiftlint, so args start at
+      # the subcommand. --strict promotes warnings (e.g. line_length) to failures.
+      - name: Run SwiftLint
+        uses: docker://ghcr.io/realm/swiftlint:0.63.3
+        with:
+          args: lint --strict

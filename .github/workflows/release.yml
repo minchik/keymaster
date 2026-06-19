@@ -10,7 +10,11 @@ permissions:
   contents: write       # create the GitHub Release in this repo
 
 jobs:
+  test:
+    uses: ./.github/workflows/ci.yml   # gate the release on the unit tests
+
   release:
+    needs: test
     runs-on: macos-15
     env:
       PROJECT: keymaster/keymaster.xcodeproj
