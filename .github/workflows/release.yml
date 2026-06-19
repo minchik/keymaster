@@ -1,0 +1,112 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:   # manual runs are for debugging; version is derived from a v* tag
+
+permissions:
+  contents: write       # create the GitHub Release in this repo
+
+jobs:
+  release:
+    runs-on: macos-15
+    env:
+      PROJECT: keymaster/keymaster.xcodeproj
+      SCHEME: keymaster
+      TEAM_ID: "57ACZ9RAXL"
+      TAP_REPO: minchik/homebrew-tap          # cask-bump target; step is skipped if TAP_TOKEN is unset
+      TAP_TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Import Developer ID certificate
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.DEVELOPER_ID_P12 }}
+          p12-password: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+
+      - name: Write App Store Connect API key
+        run: echo "${{ secrets.ASC_API_KEY_P8 }}" | base64 --decode > "$RUNNER_TEMP/asc.p8"
+
+      - name: Version from tag
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Archive
+        run: |
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -archivePath "$RUNNER_TEMP/keymaster.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/asc.p8" \
+            -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER }}" \
+            CODE_SIGN_STYLE=Automatic \
+            DEVELOPMENT_TEAM="$TEAM_ID"
+
+      - name: Export Developer ID app
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/keymaster.xcarchive" \
+            -exportOptionsPlist ExportOptions.plist \
+            -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/asc.p8" \
+            -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER }}"
+
+      - name: Notarize and staple
+        run: |
+          APP="$RUNNER_TEMP/export/keymaster.app"
+          ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --key "$RUNNER_TEMP/asc.p8" \
+            --key-id "${{ secrets.ASC_KEY_ID }}" \
+            --issuer "${{ secrets.ASC_ISSUER }}" \
+            --wait
+          xcrun stapler staple "$APP"
+
+      - name: Package
+        id: pkg
+        run: |
+          APP="$RUNNER_TEMP/export/keymaster.app"
+          ZIP="keymaster-${{ steps.ver.outputs.version }}.zip"
+          ditto -c -k --keepParent "$APP" "$ZIP"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(shasum -a 256 "$ZIP" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.pkg.outputs.zip }}
+          fail_on_unmatched_files: true
+
+      - name: Bump Homebrew cask
+        if: ${{ env.TAP_TOKEN != '' }}
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          SHA="${{ steps.pkg.outputs.sha256 }}"
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" tap
+          CASK="tap/Casks/keymaster.rb"
+          sed -i '' -E "s|^  version \".*\"|  version \"${VERSION}\"|" "$CASK"
+          sed -i '' -E "s|^  sha256 \".*\"|  sha256 \"${SHA}\"|" "$CASK"
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/keymaster.rb
+          git diff --cached --quiet || git commit -m "keymaster ${VERSION}"
+          git push
+
+      - name: Cleanup API key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/asc.p8"
