@@ -29,6 +29,17 @@ func authContext(verb: String, key: String) -> LAContext {
   return context
 }
 
+// The fields every Keychain query shares: the item class plus the namespaced
+// service and fixed account that together identify one stored secret. Each
+// operation extends this with the keys specific to add/read/delete.
+func baseQuery(for key: String) -> [String: Any] {
+  [
+    kSecClass as String: kSecClassGenericPassword,
+    kSecAttrService as String: servicePrefix + key,
+    kSecAttrAccount as String: account
+  ]
+}
+
 // Upsert a biometric-protected secret. The added item carries an access-control
 // object so the Keychain challenges for Touch ID on every later read/modify/delete.
 // On a duplicate, the existing item is deleted and re-added so the stored secret
@@ -37,13 +48,9 @@ func authContext(verb: String, key: String) -> LAContext {
 func setPassword(key: String, secret: Data) -> OSStatus {
   guard let accessControl = makeAccessControl() else { return errSecParam }
 
-  let addQuery: [String: Any] = [
-    kSecClass as String: kSecClassGenericPassword,
-    kSecAttrService as String: servicePrefix + key,
-    kSecAttrAccount as String: account,
-    kSecValueData as String: secret,
-    kSecAttrAccessControl as String: accessControl
-  ]
+  var addQuery = baseQuery(for: key)
+  addQuery[kSecValueData as String] = secret
+  addQuery[kSecAttrAccessControl as String] = accessControl
 
   let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
   guard addStatus == errSecDuplicateItem else { return addStatus }
@@ -55,12 +62,8 @@ func setPassword(key: String, secret: Data) -> OSStatus {
   // secret without biometric protection. Instead delete the existing item —
   // which prompts Touch ID when it carries our own biometric ACL, naming the
   // key — and re-add it so the stored secret always carries the biometric ACL.
-  let deleteQuery: [String: Any] = [
-    kSecClass as String: kSecClassGenericPassword,
-    kSecAttrService as String: servicePrefix + key,
-    kSecAttrAccount as String: account,
-    kSecUseAuthenticationContext as String: authContext(verb: "Update", key: key)
-  ]
+  var deleteQuery = baseQuery(for: key)
+  deleteQuery[kSecUseAuthenticationContext as String] = authContext(verb: "Update", key: key)
   let deleteStatus = SecItemDelete(deleteQuery as CFDictionary)
   guard deleteStatus == errSecSuccess else { return deleteStatus }
   return SecItemAdd(addQuery as CFDictionary, nil)
@@ -70,12 +73,8 @@ func setPassword(key: String, secret: Data) -> OSStatus {
 // present a Touch ID prompt naming the requested key. Returns the raw OSStatus
 // so the caller can report real failures.
 func deletePassword(key: String) -> OSStatus {
-  let query: [String: Any] = [
-    kSecClass as String: kSecClassGenericPassword,
-    kSecAttrService as String: servicePrefix + key,
-    kSecAttrAccount as String: account,
-    kSecUseAuthenticationContext as String: authContext(verb: "Delete", key: key)
-  ]
+  var query = baseQuery(for: key)
+  query[kSecUseAuthenticationContext as String] = authContext(verb: "Delete", key: key)
   return SecItemDelete(query as CFDictionary)
 }
 
@@ -83,14 +82,10 @@ func deletePassword(key: String) -> OSStatus {
 // present a Touch ID prompt naming the requested key. Returns the raw OSStatus
 // alongside the secret data (nil unless the status is success).
 func getPassword(key: String) -> (OSStatus, Data?) {
-  let query: [String: Any] = [
-    kSecClass as String: kSecClassGenericPassword,
-    kSecAttrService as String: servicePrefix + key,
-    kSecAttrAccount as String: account,
-    kSecMatchLimit as String: kSecMatchLimitOne,
-    kSecReturnData as String: true,
-    kSecUseAuthenticationContext as String: authContext(verb: "Read", key: key)
-  ]
+  var query = baseQuery(for: key)
+  query[kSecMatchLimit as String] = kSecMatchLimitOne
+  query[kSecReturnData as String] = true
+  query[kSecUseAuthenticationContext as String] = authContext(verb: "Read", key: key)
   var item: CFTypeRef?
   let status = SecItemCopyMatching(query as CFDictionary, &item)
   return (status, item as? Data)
