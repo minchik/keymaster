@@ -7,6 +7,7 @@
 // its Keychain work and exits before any AppKit run loop starts, so no window
 // is shown.
 import ArgumentParser
+import Dispatch
 import Foundation
 import LocalAuthentication
 import Security
@@ -34,6 +35,43 @@ func authContext(verb: String, key: String) -> LAContext {
   let context = LAContext()
   context.localizedReason = "\(verb) keychain secret: \"\(key)\""
   return context
+}
+
+// Pre-authenticate ONE LAContext so a whole batch of secrets (the `run`
+// subcommand) can be read with a SINGLE Touch ID prompt.
+// evaluateAccessControl(.useItem) forces one fresh biometric challenge; the
+// returned context is then handed to each readItem via
+// kSecUseAuthenticationContext, and the Keychain reuses that authentication for
+// every item instead of re-prompting. Returns nil if the user cancels or auth
+// fails, so the caller aborts before launching the command.
+//
+// Security: touchIDAuthenticationAllowableReuseDuration is left at its default
+// (0). The single prompt comes solely from sharing one already-authenticated
+// context, NOT from a reuse time window in which a recent device unlock could
+// satisfy a read — so keymaster's guarantee that every secret access forces a
+// fresh Touch ID is preserved.
+//
+// Concurrency: evaluateAccessControl(...:reply:) is async, so this bridges it to a
+// synchronous flow with a DispatchSemaphore. The app builds with
+// SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor, so this runs on the main actor and
+// semaphore.wait() blocks that thread; that is safe because LocalAuthentication
+// delivers the reply on a background queue (which signals the semaphore) and the
+// CLI has no AppKit run loop to starve.
+func authenticatedContext(reason: String) -> LAContext? {
+  guard let accessControl = makeAccessControl() else { return nil }
+  let context = LAContext()
+  let semaphore = DispatchSemaphore(value: 0)
+  var granted = false
+  context.evaluateAccessControl(
+    accessControl,
+    operation: .useItem,
+    localizedReason: reason
+  ) { success, _ in
+    granted = success
+    semaphore.signal()
+  }
+  semaphore.wait()
+  return granted ? context : nil
 }
 
 // The fields every Keychain query shares: the item class plus the namespaced
@@ -98,11 +136,22 @@ func removePassword(key: String) -> OSStatus {
 // challenges on decryption, so this read is also what gates remove/overwrite:
 // those callers run it first and proceed only when it returns errSecSuccess.
 // Returns the raw OSStatus alongside the secret data (nil unless success).
+//
+// Delegates to the context-based overload with a fresh per-key context, so
+// set/get/rm keep prompting exactly as before.
 func readItem(verb: String, key: String) -> (OSStatus, Data?) {
+  readItem(key: key, context: authContext(verb: verb, key: key))
+}
+
+// Read one item through a caller-supplied LAContext. `run` passes a single
+// pre-authenticated context (see authenticatedContext) so a batch of reads share
+// one Touch ID prompt; the per-key callers above pass a fresh context each time.
+// Returns the raw OSStatus alongside the secret data (nil unless success).
+func readItem(key: String, context: LAContext) -> (OSStatus, Data?) {
   var query = baseQuery(for: key)
   query[kSecMatchLimit as String] = kSecMatchLimitOne
   query[kSecReturnData as String] = true
-  query[kSecUseAuthenticationContext as String] = authContext(verb: verb, key: key)
+  query[kSecUseAuthenticationContext as String] = context
   var item: CFTypeRef?
   let status = SecItemCopyMatching(query as CFDictionary, &item)
   return (status, item as? Data)
@@ -157,6 +206,23 @@ func secretString(status: OSStatus, data: Data?) -> String {
     fail("stored secret is not valid UTF-8")
   }
   return password
+}
+
+// Decode a secret read for `run` into an environment-variable value. Like
+// secretString, but the error message names the failing key (a batch reads many,
+// so an unqualified message would not say which one failed) and the abort happens
+// before exec so the command never runs with a silently-missing secret. Non-UTF-8
+// is rejected because environment values must be text.
+func envSecret(forKey key: String, status: OSStatus, data: Data?) -> String {
+  guard status == errSecSuccess else {
+    let message = SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
+    fail("\(key): \(message)")
+  }
+  guard let data = data else { fail("\(key): keychain returned no data") }
+  guard let secret = String(data: data, encoding: .utf8) else {
+    fail("\(key): stored secret is not valid UTF-8")
+  }
+  return secret
 }
 
 @main
