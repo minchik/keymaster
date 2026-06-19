@@ -31,8 +31,9 @@ func authContext(verb: String, key: String) -> LAContext {
 
 // Upsert a biometric-protected secret. The added item carries an access-control
 // object so the Keychain challenges for Touch ID on every later read/modify/delete.
-// On a duplicate, the existing item is updated (which prompts, naming the key).
-// Returns the raw OSStatus so the caller can report real failures.
+// On a duplicate, the existing item is deleted and re-added so the stored secret
+// always carries our biometric ACL — never the access control of a pre-existing
+// item. Returns the raw OSStatus so the caller can report real failures.
 func setPassword(key: String, secret: Data) -> OSStatus {
   guard let accessControl = makeAccessControl() else { return errSecParam }
 
@@ -47,14 +48,22 @@ func setPassword(key: String, secret: Data) -> OSStatus {
   let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
   guard addStatus == errSecDuplicateItem else { return addStatus }
 
-  let matchQuery: [String: Any] = [
+  // An item already exists under this service/account. Its access control can't
+  // be trusted: the namespace is not exclusive, so another same-user process
+  // could have pre-created an unprotected item (e.g. `security add-generic-
+  // password`). SecItemUpdate would preserve that weak ACL and store the new
+  // secret without biometric protection. Instead delete the existing item —
+  // which prompts Touch ID when it carries our own biometric ACL, naming the
+  // key — and re-add it so the stored secret always carries the biometric ACL.
+  let deleteQuery: [String: Any] = [
     kSecClass as String: kSecClassGenericPassword,
     kSecAttrService as String: servicePrefix + key,
     kSecAttrAccount as String: account,
     kSecUseAuthenticationContext as String: authContext(verb: "Update", key: key)
   ]
-  let attributes: [String: Any] = [kSecValueData as String: secret]
-  return SecItemUpdate(matchQuery as CFDictionary, attributes as CFDictionary)
+  let deleteStatus = SecItemDelete(deleteQuery as CFDictionary)
+  guard deleteStatus == errSecSuccess else { return deleteStatus }
+  return SecItemAdd(addQuery as CFDictionary, nil)
 }
 
 // Delete a biometric-protected secret. The bound LAContext makes the Keychain
