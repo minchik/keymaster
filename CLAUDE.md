@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Keymaster is a macOS Swift CLI that stores/retrieves Keychain secrets guarded by Touch ID. It is built as a **signed `.app`**, not a bare `swiftc` binary, because the biometric guard needs the restricted `keychain-access-groups` entitlement (AMFI kills an unsigned/unprovisioned binary that carries it). The program is a CLI: its entry point in `keymaster/keymaster/keymasterApp.swift` does the Keychain work and `exit()`s before any AppKit run loop starts, so no window is shown. All logic lives in that one file.
+Keymaster is a macOS Swift CLI that stores/retrieves Keychain secrets guarded by Touch ID. It is built as a **signed `.app`**, not a bare `swiftc` binary, because the biometric guard needs the restricted `keychain-access-groups` entitlement (AMFI kills an unsigned/unprovisioned binary that carries it). The program is a CLI: its entry point in `keymaster/keymaster/keymasterApp.swift` does the Keychain work and `exit()`s before any AppKit run loop starts, so no window is shown. The keychain/biometric/CLI logic lives in `keymasterApp.swift`; the pure, biometric-free helpers for the `run` subcommand (`parseKeyMapping`, `mergedEnvironment`, `runProcess`) live in `keymaster/keymaster/RunSupport.swift` so they can be unit-tested headlessly.
 
 ## Build
 
@@ -16,11 +16,21 @@ A plain `swiftc keymaster*.swift` build will **not** work: the biometric `kSecAt
 
 ## Testing
 
-There is no automated test suite — biometric prompts can't run headless or in CI. Build and verify by hand on a Touch ID Mac:
+The keychain/biometric/exec glue can't run headless or in CI — verify it by hand on a Touch ID Mac (below). The pure logic in `RunSupport.swift` **is** unit-tested via the `keymasterTests` target (Swift Testing — `import Testing`, `@Test`/`#expect`):
+
+```bash
+xcodebuild test -project keymaster/keymaster.xcodeproj -scheme keymaster \
+  -destination 'platform=macOS' -only-testing:keymasterTests
+```
+
+The `-only-testing:keymasterTests` scope is required: it excludes `keymasterUITests`, which launches the CLI app that `exit()`s immediately and would otherwise hang/fail the run. The `keymasterTests` bundle is **host-less** (`TEST_HOST`/`BUNDLE_LOADER` cleared) because the `@main` CLI exits before an app-hosted runner can attach; `RunSupport.swift` is compiled into the bundle via a synchronized-group membership exception (there is no `@testable import`), which is why it is kept Foundation-only with no `@main`/ArgumentParser/keychain symbols.
+
+Manual checks (need a physical Touch ID Mac and the signed `.app`):
 
 - `set <newkey>`: stores the secret, **no** Touch ID prompt (the ACL is evaluated on access, not on creation).
 - `get <key>`: the Keychain challenges Touch ID; the prompt names the key.
 - `rm <key>` and overwrite (`set` on an existing key): both prompt. `SecItemDelete` does not decrypt the item, so the biometric ACL would not challenge it on its own — keymaster forces an authenticated read (`readItem`) first and proceeds only on `errSecSuccess`.
+- `run --key A --key B -- <command>`: **exactly one** Touch ID prompt, whose text names every key and the program, unlocks all the secrets. A missing/unreadable key aborts before exec, naming the key and running nothing; cancelling the prompt also runs nothing.
 
 Items live in the data-protection keychain (`kSecUseDataProtectionKeychain`), scoped to the access group from the entitlement. The legacy `security` CLI cannot see them, so a `security find-generic-password` "item not found" is expected and is **not** evidence of a bypass; the meaningful check is that `get` requires Touch ID.
 
@@ -40,12 +50,15 @@ The secret is read from **stdin**, never passed as an argument (an argument woul
 keymaster set <key>            # store a secret read from stdin; prompts on overwrite, not on first create
 keymaster get <key>            # retrieve, gated by Touch ID
 keymaster rm <key>             # remove, gated by Touch ID
+keymaster run --key <NAME|ENV=key> ... -- <command [args...]>  # inject secrets, one Touch ID prompt
 ```
 
 ```bash
 printf %s "$SECRET" | keymaster set MyKeyName   # piped
 keymaster set MyKeyName                          # interactive no-echo prompt
 ```
+
+`run` injects one or more keychain secrets into a child process as environment variables, unlocking the whole batch with a single Touch ID prompt. `--key NAME` injects env var `NAME` from keychain key `NAME`; `--key ENVNAME=keychainkey` injects env var `ENVNAME` from keychain key `keychainkey` (split on the first `=` only). Any missing/unreadable key aborts before the command runs, and the child's exit code is forwarded (a signal death as `128 + signo`).
 
 ## Storage
 
