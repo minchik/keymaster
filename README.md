@@ -37,6 +37,8 @@ keymaster set MyKeyName
 printf %s "$SECRET" | keymaster set MyKeyName
 ```
 
+Piped input is read in full, so multi-line secrets (e.g. PEM keys) are preserved; a single trailing newline is trimmed. The interactive prompt reads one typed line. Secrets must be text (valid UTF-8), and an empty secret is rejected.
+
 Creating a brand-new key does **not** prompt for Touch ID (the biometric access control is evaluated on access, not on creation). Overwriting an existing key prompts and names the key.
 
 ## Retrieve a secret

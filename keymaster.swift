@@ -10,15 +10,15 @@ let account = "keymaster"
 // Build a biometric access-control object so the Keychain itself challenges
 // for Touch ID on every read/modify/delete. Returns nil if creation fails.
 func makeAccessControl() -> SecAccessControl? {
+  // Success is indicated by a non-nil return value, per the Security API
+  // contract; a nil return (with the error populated) means creation failed.
   var error: Unmanaged<CFError>?
-  let accessControl = SecAccessControlCreateWithFlags(
+  return SecAccessControlCreateWithFlags(
     nil,
     kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly,
     .biometryAny,
     &error
   )
-  guard error == nil else { return nil }
-  return accessControl
 }
 
 // Produce an LAContext whose prompt names the requested key, so a caller
@@ -95,18 +95,27 @@ func usage() {
 }
 
 // Read one secret from stdin. When stdin is a TTY, prompt and disable terminal
-// echo so the typed secret never appears on screen; otherwise read a single
-// piped line. The trailing newline is stripped. Returns nil if nothing is read.
+// echo so the typed secret never appears on screen, then read a single typed
+// line. Otherwise read all piped input so multi-line secrets are preserved,
+// trimming a single trailing newline. Returns nil if nothing valid is read.
 func readSecret(for key: String) -> String? {
   guard isatty(STDIN_FILENO) != 0 else {
-    return readLine(strippingNewline: true)
+    let data = FileHandle.standardInput.readDataToEndOfFile()
+    guard var secret = String(data: data, encoding: .utf8) else { return nil }
+    if secret.hasSuffix("\n") { secret.removeLast() }
+    return secret
   }
   FileHandle.standardError.write(Data("Secret for \"\(key)\": ".utf8))
   var original = termios()
-  tcgetattr(STDIN_FILENO, &original)
+  guard tcgetattr(STDIN_FILENO, &original) == 0 else {
+    fail("could not read terminal settings")
+  }
   var noEcho = original
   noEcho.c_lflag &= ~tcflag_t(ECHO)
-  tcsetattr(STDIN_FILENO, TCSAFLUSH, &noEcho)
+  // Abort rather than fall through with echo on, which would print the secret.
+  guard tcsetattr(STDIN_FILENO, TCSAFLUSH, &noEcho) == 0 else {
+    fail("could not disable terminal echo")
+  }
   defer {
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &original)
     FileHandle.standardError.write(Data("\n".utf8))
@@ -124,6 +133,16 @@ func fail(_ message: String) -> Never {
 func failKeychain(_ status: OSStatus) -> Never {
   let message = SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
   fail(message)
+}
+
+// Decode a getPassword result into the secret string, exiting on any failure.
+func secretString(status: OSStatus, data: Data?) -> String {
+  guard status == errSecSuccess else { failKeychain(status) }
+  guard let data = data else { fail("keychain returned no data") }
+  guard let password = String(data: data, encoding: .utf8) else {
+    fail("stored secret is not valid UTF-8")
+  }
+  return password
 }
 
 func main() {
@@ -145,11 +164,7 @@ func main() {
     print("Key \"\(key)\" has been set in the keychain")
   case "get":
     let (status, data) = getPassword(key: key)
-    guard status == errSecSuccess else { failKeychain(status) }
-    guard let data = data, let password = String(data: data, encoding: .utf8) else {
-      fail("stored secret is not valid UTF-8")
-    }
-    print(password)
+    print(secretString(status: status, data: data))
   case "delete":
     let status = deletePassword(key: key)
     guard status == errSecSuccess else { failKeychain(status) }
