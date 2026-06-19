@@ -3,7 +3,7 @@
 // This is an .app target only so the binary can carry the
 // `keychain-access-groups` entitlement (a restricted entitlement that AMFI
 // rejects on an unsigned/unprovisioned binary). At runtime it behaves as a
-// CLI: `keymaster.app/Contents/MacOS/keymaster <set|get|delete> <key>` does
+// CLI: `keymaster.app/Contents/MacOS/keymaster <set|get|rm> <key>` does
 // its Keychain work and exits before any AppKit run loop starts, so no window
 // is shown.
 import Foundation
@@ -14,7 +14,7 @@ let servicePrefix = "dev.mnck."
 let account = "keymaster"
 
 // Build a biometric access-control object so the Keychain itself challenges
-// for Touch ID on every read/modify/delete. Returns nil if creation fails.
+// for Touch ID on every read/modify/remove. Returns nil if creation fails.
 func makeAccessControl() -> SecAccessControl? {
   // Success is indicated by a non-nil return value, per the Security API
   // contract; a nil return (with the error populated) means creation failed.
@@ -37,7 +37,7 @@ func authContext(verb: String, key: String) -> LAContext {
 
 // The fields every Keychain query shares: the item class plus the namespaced
 // service and fixed account that together identify one stored secret. Each
-// operation extends this with the keys specific to add/read/delete.
+// operation extends this with the keys specific to add/read/remove.
 //
 // kSecUseDataProtectionKeychain pins every operation to the modern
 // data-protection keychain. The biometric access control and the
@@ -54,8 +54,8 @@ func baseQuery(for key: String) -> [String: Any] {
 }
 
 // Upsert a biometric-protected secret. The added item carries an access-control
-// object so the Keychain challenges for Touch ID on every later read/modify/delete.
-// On a duplicate, the existing item is deleted and re-added so the stored secret
+// object so the Keychain challenges for Touch ID on every later read/modify/remove.
+// On a duplicate, the existing item is removed and re-added so the stored secret
 // always carries our biometric ACL — never the access control of a pre-existing
 // item. Returns the raw OSStatus so the caller can report real failures.
 func setPassword(key: String, secret: Data) -> OSStatus {
@@ -72,29 +72,29 @@ func setPassword(key: String, secret: Data) -> OSStatus {
   // be trusted: another binary entitled to this access group could have created
   // it with a weaker ACL, and SecItemUpdate would preserve that ACL while
   // storing the new secret. Instead force a Touch ID prompt (an authenticated
-  // read naming the key), then delete the existing item and re-add it so the
+  // read naming the key), then remove the existing item and re-add it so the
   // stored secret always carries our biometric ACL. SecItemDelete does not
   // decrypt, so the read is what gates this overwrite behind Touch ID.
   let (auth, _) = readItem(verb: "Update", key: key)
   guard auth == errSecSuccess else { return auth }
-  let deleteStatus = SecItemDelete(baseQuery(for: key) as CFDictionary)
-  guard deleteStatus == errSecSuccess else { return deleteStatus }
+  let removeStatus = SecItemDelete(baseQuery(for: key) as CFDictionary)
+  guard removeStatus == errSecSuccess else { return removeStatus }
   return SecItemAdd(addQuery as CFDictionary, nil)
 }
 
-// Delete a biometric-protected secret. SecItemDelete does not decrypt the item,
+// Remove a biometric-protected secret. SecItemDelete does not decrypt the item,
 // so the biometric ACL would not challenge it on its own; we first force a Touch
-// ID prompt with an authenticated read and delete only when the user approves.
+// ID prompt with an authenticated read and remove only when the user approves.
 // Returns the raw OSStatus so the caller can report real failures.
-func deletePassword(key: String) -> OSStatus {
-  let (auth, _) = readItem(verb: "Delete", key: key)
+func removePassword(key: String) -> OSStatus {
+  let (auth, _) = readItem(verb: "Remove", key: key)
   guard auth == errSecSuccess else { return auth }
   return SecItemDelete(baseQuery(for: key) as CFDictionary)
 }
 
 // Read the item, forcing a Touch ID challenge whose prompt names the key and
-// uses `verb` (e.g. "Read", "Delete", "Update"). The biometric ACL only
-// challenges on decryption, so this read is also what gates delete/overwrite:
+// uses `verb` (e.g. "Read", "Remove", "Update"). The biometric ACL only
+// challenges on decryption, so this read is also what gates remove/overwrite:
 // those callers run it first and proceed only when it returns errSecSuccess.
 // Returns the raw OSStatus alongside the secret data (nil unless success).
 func readItem(verb: String, key: String) -> (OSStatus, Data?) {
@@ -111,7 +111,7 @@ func usage() {
   print("Usage:")
   print("  keymaster set <key>      # store a secret read from stdin, gated by Touch ID")
   print("  keymaster get <key>      # retrieve a secret, gated by Touch ID")
-  print("  keymaster delete <key>   # remove a secret, gated by Touch ID")
+  print("  keymaster rm <key>       # remove a secret, gated by Touch ID")
 }
 
 // Read one secret from stdin. When stdin is a TTY, prompt and disable terminal
@@ -187,10 +187,10 @@ struct KeymasterCLI {
     case "get":
       let (status, data) = readItem(verb: "Read", key: key)
       print(secretString(status: status, data: data))
-    case "delete":
-      let status = deletePassword(key: key)
+    case "rm":
+      let status = removePassword(key: key)
       guard status == errSecSuccess else { failKeychain(status) }
-      print("Key \"\(key)\" has been deleted from the keychain")
+      print("Key \"\(key)\" has been removed from the keychain")
     default:
       usage()
       exit(EXIT_FAILURE)

@@ -16,7 +16,7 @@ There is no automated test suite — biometric prompts can't run headless or in 
 
 - `set <newkey>`: stores the secret, **no** Touch ID prompt (the ACL is evaluated on access, not on creation).
 - `get <key>`: the Keychain challenges Touch ID; the prompt names the key.
-- `delete <key>` and overwrite (`set` on an existing key): both prompt. `SecItemDelete` does not decrypt the item, so the biometric ACL would not challenge it on its own — keymaster forces an authenticated read (`readItem`) first and proceeds only on `errSecSuccess`.
+- `rm <key>` and overwrite (`set` on an existing key): both prompt. `SecItemDelete` does not decrypt the item, so the biometric ACL would not challenge it on its own — keymaster forces an authenticated read (`readItem`) first and proceeds only on `errSecSuccess`.
 
 Items live in the data-protection keychain (`kSecUseDataProtectionKeychain`), scoped to the access group from the entitlement. The legacy `security` CLI cannot see them, so a `security find-generic-password` "item not found" is expected and is **not** evidence of a bypass; the meaningful check is that `get` requires Touch ID.
 
@@ -35,7 +35,7 @@ The secret is read from **stdin**, never passed as an argument (an argument woul
 ```
 keymaster set <key>            # store a secret read from stdin; prompts on overwrite, not on first create
 keymaster get <key>            # retrieve, gated by Touch ID
-keymaster delete <key>         # remove, gated by Touch ID
+keymaster rm <key>             # remove, gated by Touch ID
 ```
 
 ```bash

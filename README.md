@@ -19,7 +19,7 @@ You can use `security` in a script, but (AFAIK) you can't tell it to guard secre
 
 - **Reading a secret triggers a Touch ID challenge from the Keychain itself** — there is no "always allow" to grant.
 - The items are **isolated by entitlement**: only a binary signed into keymaster's access group can see them at all. Another process running as you can't read them with `security find-generic-password` — it won't even find them.
-- **Delete and overwrite are gated by Touch ID too.** The Keychain does not challenge deletion on its own (deleting doesn't decrypt the secret), so keymaster forces an authenticated read first and only proceeds when you approve.
+- **Removing and overwriting are gated by Touch ID too.** The Keychain does not challenge removal on its own (removing doesn't decrypt the secret), so keymaster forces an authenticated read first and only proceeds when you approve.
 
 ## Building Keymaster
 
@@ -58,11 +58,11 @@ Creating a brand-new key does **not** prompt for Touch ID (the biometric access 
 
 A Touch ID prompt appears that **names the requested key** (e.g. `Read keychain secret: "MyKeyName"`), so a script asking for the wrong secret is visible at approval time. On a match, the secret is printed to stdout. Cancelling the prompt denies access, prints nothing, and exits non-zero.
 
-## Delete a secret
+## Remove a secret
 
-`keymaster delete MyKeyName`
+`keymaster rm MyKeyName`
 
-A Touch ID prompt naming the key (`Delete keychain secret: "MyKeyName"`) appears before the item is removed.
+A Touch ID prompt naming the key (`Remove keychain secret: "MyKeyName"`) appears before the item is removed.
 
 ## Storage details
 
@@ -75,7 +75,7 @@ A Touch ID prompt naming the key (`Delete keychain secret: "MyKeyName"`) appears
 
 The previous keymaster stored items in the **legacy** keychain with **no biometric protection**. This version uses the data-protection keychain, so old secrets are not found and must be re-`set` with the new build.
 
-The old items are still there and are still readable by any process **with no Touch ID prompt**. Deleting them is **required** to remove that exposure, not optional:
+The old items are still there and are still readable by any process **with no Touch ID prompt**. Removing them is **required** to remove that exposure, not optional:
 
 ```bash
 security delete-generic-password -s <oldkey>     # repeat per old key (or use Keychain Access.app)
