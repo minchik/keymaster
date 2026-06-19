@@ -29,15 +29,30 @@ struct RunSupportTests {
   }
 
   @Test func parseRejectsEmptyEnvName() {
-    #expect(throws: KeyMappingError.self) {
+    #expect(throws: KeyMappingError.emptyName("=key")) {
       _ = try parseKeyMapping("=key")
     }
   }
 
   @Test func parseRejectsEmptyKey() {
-    #expect(throws: KeyMappingError.self) {
+    #expect(throws: KeyMappingError.emptyKey("NAME=")) {
       _ = try parseKeyMapping("NAME=")
     }
+  }
+
+  @Test func parseRejectsBareEmptyString() {
+    // No "=" present, so the empty-input guard (not the split branch) rejects it
+    // as an empty env name — otherwise it would map "" to env "" / key "".
+    #expect(throws: KeyMappingError.emptyName("")) {
+      _ = try parseKeyMapping("")
+    }
+  }
+
+  @Test func errorDescriptionNamesTheOffendingArgument() {
+    #expect(KeyMappingError.emptyName("=key").description
+      == "invalid --key \"=key\": environment variable name is empty")
+    #expect(KeyMappingError.emptyKey("NAME=").description
+      == "invalid --key \"NAME=\": keychain key is empty")
   }
 
   // MARK: mergedEnvironment

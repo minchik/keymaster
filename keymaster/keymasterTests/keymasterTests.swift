@@ -12,7 +12,6 @@ import Testing
 // an app-hosted bundle never finishes bootstrapping (the runner exits with code 64
 // before establishing a connection). Pure logic under test is compiled directly into
 // this bundle via a synchronized-group membership exception (see RunSupport.swift).
-// See Task 1 in docs/plans/20260619-keymaster-run-subcommand.md.
 struct keymasterTests {
 
     @Test func testTargetRuns() async throws {

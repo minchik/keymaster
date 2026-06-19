@@ -81,7 +81,7 @@ Everything after `--` is the command to run. Each `--key` is repeatable and name
 
 The injected variables are merged over the current environment (a `--key` that names an existing env var overrides it; a duplicated env name keeps the last one). The command is launched through `/usr/bin/env`, so a bare program name like `node` is resolved against `PATH`, and stdio is inherited so the child talks to your terminal directly.
 
-**One prompt for the whole batch.** A single Touch ID prompt appears whose text names every requested key and the program, e.g. `Run "./deploy.sh" with keychain secrets: "API_TOKEN", "DB_PASS"`. Approving it once reads all the secrets; you are not challenged per secret. (This reuses one pre-authenticated authentication context, not a time-based reuse window, so each `run` still forces a fresh Touch ID.)
+**One prompt for the whole batch.** A single Touch ID prompt appears whose text names every requested key and the program, e.g. `Run "./deploy.sh" with keychain secrets: "API_TOKEN", "prod-db-password"` (the prompt names the keychain keys being unlocked, so a renamed `ENV=key` shows the key side). Approving it once reads all the secrets; you are not challenged per secret. (This reuses one pre-authenticated authentication context, not a time-based reuse window, so each `run` still forces a fresh Touch ID.)
 
 **Abort before exec on any failure.** If any requested key is missing or unreadable, `keymaster run` prints a message naming that key and exits non-zero **without** launching the command — it never runs with a silently-missing secret. Cancelling the Touch ID prompt likewise exits non-zero and runs nothing.
 

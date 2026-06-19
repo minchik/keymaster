@@ -15,7 +15,7 @@ struct KeyMapping: Equatable {
 }
 
 // Raised when a `--key` argument is malformed, so it is rejected before any exec.
-enum KeyMappingError: Error, CustomStringConvertible {
+enum KeyMappingError: Error, Equatable, CustomStringConvertible {
   case emptyName(String)
   case emptyKey(String)
 
