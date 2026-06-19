@@ -33,6 +33,16 @@ jobs:
           p12-file-base64: ${{ secrets.DEVELOPER_ID_P12 }}
           p12-password: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
 
+      - name: Install provisioning profile
+        env:
+          PROFILE_B64: ${{ secrets.DEVELOPER_ID_PROFILE }}
+        run: |
+          for dir in "$HOME/Library/MobileDevice/Provisioning Profiles" \
+                     "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
+            mkdir -p "$dir"
+            printf '%s' "$PROFILE_B64" | base64 --decode > "$dir/keymaster.provisionprofile"
+          done
+
       - name: Write App Store Connect API key
         env:
           ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
@@ -56,36 +66,25 @@ jobs:
         env:
           VERSION: ${{ steps.ver.outputs.version }}
           BUILD_NUMBER: ${{ github.run_number }}
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER: ${{ secrets.ASC_ISSUER }}
         run: |
           xcodebuild archive \
             -project "$PROJECT" \
             -scheme "$SCHEME" \
             -configuration Release \
             -archivePath "$RUNNER_TEMP/keymaster.xcarchive" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$RUNNER_TEMP/asc.p8" \
-            -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER" \
-            CODE_SIGN_STYLE=Automatic \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Developer ID Application" \
+            PROVISIONING_PROFILE_SPECIFIER="keymaster Developer ID" \
             DEVELOPMENT_TEAM="$TEAM_ID" \
             MARKETING_VERSION="$VERSION" \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
 
       - name: Export Developer ID app
-        env:
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER: ${{ secrets.ASC_ISSUER }}
         run: |
           xcodebuild -exportArchive \
             -archivePath "$RUNNER_TEMP/keymaster.xcarchive" \
             -exportOptionsPlist ExportOptions.plist \
-            -exportPath "$RUNNER_TEMP/export" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$RUNNER_TEMP/asc.p8" \
-            -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER"
+            -exportPath "$RUNNER_TEMP/export"
 
       - name: Notarize and staple
         env:

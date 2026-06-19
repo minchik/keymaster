@@ -7,6 +7,13 @@
   <key>teamID</key>
   <string>57ACZ9RAXL</string>
   <key>signingStyle</key>
-  <string>automatic</string>
+  <string>manual</string>
+  <key>signingCertificate</key>
+  <string>Developer ID Application</string>
+  <key>provisioningProfiles</key>
+  <dict>
+    <key>dev.mnck.keymaster</key>
+    <string>keymaster Developer ID</string>
+  </dict>
 </dict>
 </plist>
