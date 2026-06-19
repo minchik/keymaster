@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		DA7B8BBC2FE5BC6800AB4D8F /* ArgumentParser in Frameworks */ = {isa = PBXBuildFile; productRef = DA7B8BBB2FE5BC6800AB4D8F /* ArgumentParser */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		DA7B8B4D2FE580C700AB4D8F /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +56,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DA7B8BBC2FE5BC6800AB4D8F /* ArgumentParser in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +117,7 @@
 			);
 			name = keymaster;
 			packageProductDependencies = (
+				DA7B8BBB2FE5BC6800AB4D8F /* ArgumentParser */,
 			);
 			productName = Keymaster;
 			productReference = DA7B8B3F2FE580C600AB4D8F /* Keymaster.app */;
@@ -195,6 +201,9 @@
 			);
 			mainGroup = DA7B8B362FE580C600AB4D8F;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				DA7B8BBA2FE5BC6800AB4D8F /* XCRemoteSwiftPackageReference "swift-argument-parser" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = DA7B8B402FE580C600AB4D8F /* Products */;
 			projectDirPath = "";
@@ -579,6 +588,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		DA7B8BBA2FE5BC6800AB4D8F /* XCRemoteSwiftPackageReference "swift-argument-parser" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-argument-parser.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.8.2;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		DA7B8BBB2FE5BC6800AB4D8F /* ArgumentParser */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DA7B8BBA2FE5BC6800AB4D8F /* XCRemoteSwiftPackageReference "swift-argument-parser" */;
+			productName = ArgumentParser;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = DA7B8B372FE580C600AB4D8F /* Project object */;
 }

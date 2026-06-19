@@ -34,6 +34,8 @@ The biometric guard relies on a **restricted entitlement** (`keychain-access-gro
    ln -sf "/path/to/Keymaster.app/Contents/MacOS/keymaster" /usr/local/bin/keymaster
    ```
 
+Keymaster depends on [swift-argument-parser](https://github.com/apple/swift-argument-parser); Xcode resolves and fetches it automatically on the first build (the exact version is pinned in the project's committed `Package.resolved`), so the only requirement beyond Xcode is an internet connection on that first build.
+
 Requires a Mac with Touch ID and an Apple signing identity configured in Xcode.
 
 ## Save a secret to the keychain

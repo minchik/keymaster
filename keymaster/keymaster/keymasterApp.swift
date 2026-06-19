@@ -6,6 +6,7 @@
 // CLI: `Keymaster.app/Contents/MacOS/keymaster <set|get|rm> <key>` does
 // its Keychain work and exits before any AppKit run loop starts, so no window
 // is shown.
+import ArgumentParser
 import Foundation
 import LocalAuthentication
 import Security
@@ -107,13 +108,6 @@ func readItem(verb: String, key: String) -> (OSStatus, Data?) {
   return (status, item as? Data)
 }
 
-func usage() {
-  print("Usage:")
-  print("  keymaster set <key>      # store a secret read from stdin, gated by Touch ID")
-  print("  keymaster get <key>      # retrieve a secret, gated by Touch ID")
-  print("  keymaster rm <key>       # remove a secret, gated by Touch ID")
-}
-
 // Read one secret from stdin. When stdin is a TTY, prompt and disable terminal
 // echo so the typed secret never appears on screen, then read a single typed
 // line. Otherwise read all piped input so multi-line secrets are preserved,
@@ -166,34 +160,64 @@ func secretString(status: OSStatus, data: Data?) -> String {
 }
 
 @main
-struct KeymasterCLI {
-  static func main() {
-    let inputArgs = Array(CommandLine.arguments.dropFirst())
-    guard inputArgs.count == 2 else {
-      usage()
-      exit(EXIT_FAILURE)
-    }
-    let action = inputArgs[0]
-    let key = inputArgs[1]
+struct Keymaster: ParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "keymaster",
+    abstract: "Store and retrieve Keychain secrets guarded by Touch ID.",
+    subcommands: [Set.self, Get.self, Remove.self]
+  )
+}
 
-    switch action {
-    case "set":
+extension Keymaster {
+  // Store a secret read from stdin. No Touch ID prompt on first create (the ACL
+  // is evaluated on access, not creation); an overwrite prompts via setPassword.
+  struct Set: ParsableCommand {
+    static let configuration = CommandConfiguration(
+      abstract: "Store a secret read from stdin; prompts on overwrite."
+    )
+
+    @Argument(help: "The key to store the secret under.")
+    var key: String
+
+    func run() {
       guard let secret = readSecret(for: key), !secret.isEmpty else {
         fail("no secret provided")
       }
       let status = setPassword(key: key, secret: Data(secret.utf8))
       guard status == errSecSuccess else { failKeychain(status) }
       print("Key \"\(key)\" has been set in the keychain")
-    case "get":
+    }
+  }
+
+  // Retrieve a secret; the Keychain challenges Touch ID on the read.
+  struct Get: ParsableCommand {
+    static let configuration = CommandConfiguration(
+      abstract: "Retrieve a secret, gated by Touch ID."
+    )
+
+    @Argument(help: "The key to retrieve.")
+    var key: String
+
+    func run() {
       let (status, data) = readItem(verb: "Read", key: key)
       print(secretString(status: status, data: data))
-    case "rm":
+    }
+  }
+
+  // Remove a secret; removePassword forces a Touch ID read before deleting.
+  struct Remove: ParsableCommand {
+    static let configuration = CommandConfiguration(
+      commandName: "rm",
+      abstract: "Remove a secret, gated by Touch ID."
+    )
+
+    @Argument(help: "The key to remove.")
+    var key: String
+
+    func run() {
       let status = removePassword(key: key)
       guard status == errSecSuccess else { failKeychain(status) }
       print("Key \"\(key)\" has been removed from the keychain")
-    default:
-      usage()
-      exit(EXIT_FAILURE)
     }
   }
 }

@@ -8,6 +8,10 @@ Keymaster is a macOS Swift CLI that stores/retrieves Keychain secrets guarded by
 
 Open `keymaster/keymaster.xcodeproj` in Xcode, select the **keymaster** target ▸ **Signing & Capabilities**, set your **Team** (automatic signing; the Keychain Sharing capability + group `dev.mnck.keymaster` are already configured), and build (⌘B). The CLI binary is inside the bundle at `Keymaster.app/Contents/MacOS/keymaster`.
 
+### Dependency
+
+Argument parsing uses [swift-argument-parser](https://github.com/apple/swift-argument-parser) — each subcommand (`set`/`get`/`rm`) is a `ParsableCommand` in `keymasterApp.swift`; the Keychain logic stays in that same file. It is wired in as an SPM package and **resolved automatically**: Xcode fetches it on first build, and the release workflow's `xcodebuild archive` fetches it on a clean runner (no `-disableAutomaticPackageResolution`). The pinned version lives in `keymaster.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`, which is **committed** so CI builds are reproducible rather than re-resolving to the latest `1.x`. The library links statically into the binary, so there is no extra framework to sign or notarize. If you ever re-add the package by hand, link **only** the `ArgumentParser` library product to the **keymaster** target — leave the `generate-manual` and `generate-docc-reference` executable products set to **None**.
+
 A plain `swiftc keymaster*.swift` build will **not** work: the biometric `kSecAttrAccessControl` requires the `keychain-access-groups` entitlement, an unsigned binary that adds without it gets `errSecMissingEntitlement` (-34018), and a binary that carries it without a provisioning profile is SIGKILLed by AMFI. The `.app` target is what supplies the profile.
 
 ## Testing
