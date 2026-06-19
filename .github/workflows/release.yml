@@ -15,7 +15,7 @@ jobs:
 
   release:
     needs: test
-    runs-on: macos-15
+    runs-on: macos-26
     env:
       PROJECT: keymaster/keymaster.xcodeproj
       SCHEME: keymaster
