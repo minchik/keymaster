@@ -21,7 +21,19 @@ You can use `security` in a script, but (AFAIK) you can't tell it to guard secre
 - The items are **isolated by entitlement**: only a binary signed into keymaster's access group can see them at all. Another process running as you can't read them with `security find-generic-password` — it won't even find them.
 - **Removing and overwriting are gated by Touch ID too.** The Keychain does not challenge removal on its own (removing doesn't decrypt the secret), so keymaster forces an authenticated read first and only proceeds when you approve.
 
-## Building Keymaster
+## Installing
+
+The easiest way is Homebrew, via the [`minchik/tap`](https://github.com/minchik/homebrew-tap) cask:
+
+```bash
+brew install --cask minchik/tap/keymaster
+```
+
+This downloads the signed release `.app` and symlinks the inner `keymaster` CLI onto your `PATH`, so there's nothing to build or sign yourself. Upgrade with `brew upgrade --cask keymaster` and remove with `brew uninstall --cask keymaster`.
+
+Requires a Mac with Touch ID.
+
+## Building from source
 
 The biometric guard relies on a **restricted entitlement** (`keychain-access-groups`). macOS kills an unsigned/unprovisioned binary that carries it, so keymaster **cannot** be a plain `swiftc` binary — it must be built as a signed `.app` with your own Apple signing identity:
 
@@ -86,6 +98,18 @@ The injected variables are merged over the current environment (a `--key` that n
 **Abort before exec on any failure.** If any requested key is missing or unreadable, `keymaster run` prints a message naming that key and exits non-zero **without** launching the command — it never runs with a silently-missing secret. Cancelling the Touch ID prompt likewise exits non-zero and runs nothing.
 
 The secret never appears on a command line: it is handed to the child through its environment, not as an argument, so it stays out of keymaster's (and the child's) argv and out of your shell history — the classic argv leak (CWE-214) doesn't apply. It does, though, live in the child's environment for the child's lifetime: it is inherited by anything the child spawns, is readable by `root`, and may be surfaced by tools that read process environments (`ps -E` is documented to print them, though current macOS restricts what it returns) — visibility depends on your OS version, tooling, and permissions. So **once injected the secret is no longer behind the biometric guard** — it is only as private as the process tree you hand it to. The child's exit code is forwarded as keymaster's own (a child killed by a signal is reported as `128 + signal number`, mirroring shell convention).
+
+A handy pattern is a small wrapper script that runs a tool with its secrets injected. For example, to give [Taskwarrior](https://taskwarrior.org) its sync credentials behind a single Touch ID prompt:
+
+```sh
+#!/bin/sh
+
+keymaster run \
+  --key TASKWARRIOR_SYNC_URL \
+  --key TASKWARRIOR_CLIENT_ID \
+  --key TASKWARRIOR_ENCRYPTION_SECRET \
+  -- task sync
+```
 
 ## Storage details
 
