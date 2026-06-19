@@ -4,7 +4,6 @@ import Foundation
 import LocalAuthentication
 import Security
 
-let policy = LAPolicy.deviceOwnerAuthenticationWithBiometrics
 let servicePrefix = "dev.mnck."
 let account = "keymaster"
 
@@ -89,81 +88,75 @@ func getPassword(key: String) -> (OSStatus, Data?) {
 }
 
 func usage() {
-  print("keymaster [get|set|delete] [key] [secret]")
+  print("Usage:")
+  print("  keymaster set <key>      # store a secret read from stdin, gated by Touch ID")
+  print("  keymaster get <key>      # retrieve a secret, gated by Touch ID")
+  print("  keymaster delete <key>   # remove a secret, gated by Touch ID")
+}
+
+// Read one secret from stdin. When stdin is a TTY, prompt and disable terminal
+// echo so the typed secret never appears on screen; otherwise read a single
+// piped line. The trailing newline is stripped. Returns nil if nothing is read.
+func readSecret(for key: String) -> String? {
+  guard isatty(STDIN_FILENO) != 0 else {
+    return readLine(strippingNewline: true)
+  }
+  FileHandle.standardError.write(Data("Secret for \"\(key)\": ".utf8))
+  var original = termios()
+  tcgetattr(STDIN_FILENO, &original)
+  var noEcho = original
+  noEcho.c_lflag &= ~tcflag_t(ECHO)
+  tcsetattr(STDIN_FILENO, TCSAFLUSH, &noEcho)
+  defer {
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &original)
+    FileHandle.standardError.write(Data("\n".utf8))
+  }
+  return readLine(strippingNewline: true)
+}
+
+// Print a human-readable Keychain error and exit non-zero.
+func fail(_ message: String) -> Never {
+  FileHandle.standardError.write(Data("Error: \(message)\n".utf8))
+  exit(EXIT_FAILURE)
+}
+
+// Translate an OSStatus into a message via SecCopyErrorMessageString and exit.
+func failKeychain(_ status: OSStatus) -> Never {
+  let message = SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
+  fail(message)
 }
 
 func main() {
-  let inputArgs: [String] = Array(CommandLine.arguments.dropFirst())
-  if inputArgs.count < 2 || inputArgs.count > 3 {
+  let inputArgs = Array(CommandLine.arguments.dropFirst())
+  guard inputArgs.count == 2 else {
     usage()
-    exit(EXIT_FAILURE) 
+    exit(EXIT_FAILURE)
   }
   let action = inputArgs[0]
   let key = inputArgs[1]
-  var secret = ""
-  if action == "set" && inputArgs.count == 3 {
-    secret = inputArgs[2]
-  }
 
-  let context = LAContext()
-  context.touchIDAuthenticationAllowableReuseDuration = 0
-
-  var error: NSError?
-  guard context.canEvaluatePolicy(policy, error: &error) else {
-    print("This Mac doesn't support deviceOwnerAuthenticationWithBiometrics")
+  switch action {
+  case "set":
+    guard let secret = readSecret(for: key), !secret.isEmpty else {
+      fail("no secret provided")
+    }
+    let status = setPassword(key: key, secret: Data(secret.utf8))
+    guard status == errSecSuccess else { failKeychain(status) }
+    print("Key \"\(key)\" has been set in the keychain")
+  case "get":
+    let (status, data) = getPassword(key: key)
+    guard status == errSecSuccess else { failKeychain(status) }
+    guard let data = data, let password = String(data: data, encoding: .utf8) else {
+      fail("stored secret is not valid UTF-8")
+    }
+    print(password)
+  case "delete":
+    let status = deletePassword(key: key)
+    guard status == errSecSuccess else { failKeychain(status) }
+    print("Key \"\(key)\" has been deleted from the keychain")
+  default:
+    usage()
     exit(EXIT_FAILURE)
-  }
-
-  if action == "set" {
-    context.evaluatePolicy(policy, localizedReason: "set to your password") { _, _ in
-      guard setPassword(key: key, secret: Data(secret.utf8)) == errSecSuccess else {
-        print("Error setting password")
-        exit(EXIT_FAILURE)
-      }
-      print("Key \(key) has been sucessfully set in the keychain")
-      exit(EXIT_SUCCESS)
-    }
-    dispatchMain()
-  }
-
-  if action == "get" {
-    context.evaluatePolicy(policy, localizedReason: "access to your password") { success, error in
-      if success && error == nil {
-        let (status, data) = getPassword(key: key)
-        guard status == errSecSuccess,
-          let data = data,
-          let password = String(data: data, encoding: String.Encoding.utf8)
-        else {
-          print("Error getting password")
-          exit(EXIT_FAILURE)
-        }
-        print(password)
-        exit(EXIT_SUCCESS)
-      } else {
-        let errorDescription = error?.localizedDescription ?? "Unknown error"
-        print("Error \(errorDescription)")
-        exit(EXIT_FAILURE)
-      }
-    }
-    dispatchMain()
-  }
-
-  if action == "delete" {
-    context.evaluatePolicy(policy, localizedReason: "delete your password") { success, error in
-      if success && error == nil {
-        guard deletePassword(key: key) == errSecSuccess else {
-          print("Error deleting password")
-          exit(EXIT_FAILURE)
-        }
-        print("Key \(key) has been sucessfully deleted from the keychain")
-        exit(EXIT_SUCCESS)
-      } else {
-        let errorDescription = error?.localizedDescription ?? "Unknown error"
-        print("Error \(errorDescription)")
-        exit(EXIT_FAILURE)
-      }
-    }
-    dispatchMain()
   }
 }
 
