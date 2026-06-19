@@ -91,7 +91,7 @@ jobs:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER: ${{ secrets.ASC_ISSUER }}
         run: |
-          APP="$RUNNER_TEMP/export/keymaster.app"
+          APP="$RUNNER_TEMP/export/Keymaster.app"
           ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/notarize.zip"
           xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
             --key "$RUNNER_TEMP/asc.p8" \
@@ -105,7 +105,7 @@ jobs:
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          APP="$RUNNER_TEMP/export/keymaster.app"
+          APP="$RUNNER_TEMP/export/Keymaster.app"
           ZIP="keymaster-${VERSION}.zip"
           ditto -c -k --keepParent "$APP" "$ZIP"
           echo "zip=$ZIP" >> "$GITHUB_OUTPUT"

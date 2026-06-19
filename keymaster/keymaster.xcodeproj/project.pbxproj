@@ -24,7 +24,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		DA7B8B3F2FE580C600AB4D8F /* keymaster.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = keymaster.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DA7B8B3F2FE580C600AB4D8F /* Keymaster.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Keymaster.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		DA7B8B4C2FE580C700AB4D8F /* keymasterTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = keymasterTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		DA7B8B562FE580C700AB4D8F /* keymasterUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = keymasterUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -85,7 +85,7 @@
 		DA7B8B402FE580C600AB4D8F /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				DA7B8B3F2FE580C600AB4D8F /* keymaster.app */,
+				DA7B8B3F2FE580C600AB4D8F /* Keymaster.app */,
 				DA7B8B4C2FE580C700AB4D8F /* keymasterTests.xctest */,
 				DA7B8B562FE580C700AB4D8F /* keymasterUITests.xctest */,
 			);
@@ -113,8 +113,8 @@
 			name = keymaster;
 			packageProductDependencies = (
 			);
-			productName = keymaster;
-			productReference = DA7B8B3F2FE580C600AB4D8F /* keymaster.app */;
+			productName = Keymaster;
+			productReference = DA7B8B3F2FE580C600AB4D8F /* Keymaster.app */;
 			productType = "com.apple.product-type.application";
 		};
 		DA7B8B4B2FE580C700AB4D8F /* keymasterTests */ = {
@@ -403,7 +403,9 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
+				EXECUTABLE_NAME = keymaster;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Keymaster;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -411,7 +413,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.mnck.keymaster;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = Keymaster;
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -436,7 +438,9 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
+				EXECUTABLE_NAME = keymaster;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Keymaster;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -444,7 +448,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.mnck.keymaster;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = Keymaster;
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -472,7 +476,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/keymaster.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/keymaster";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Keymaster.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/keymaster";
 			};
 			name = Debug;
 		};
@@ -493,7 +497,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/keymaster.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/keymaster";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Keymaster.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/keymaster";
 			};
 			name = Release;
 		};

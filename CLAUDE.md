@@ -6,7 +6,7 @@ Keymaster is a macOS Swift CLI that stores/retrieves Keychain secrets guarded by
 
 ## Build
 
-Open `keymaster/keymaster.xcodeproj` in Xcode, select the **keymaster** target ▸ **Signing & Capabilities**, set your **Team** (automatic signing; the Keychain Sharing capability + group `dev.mnck.keymaster` are already configured), and build (⌘B). The CLI binary is inside the bundle at `keymaster.app/Contents/MacOS/keymaster`.
+Open `keymaster/keymaster.xcodeproj` in Xcode, select the **keymaster** target ▸ **Signing & Capabilities**, set your **Team** (automatic signing; the Keychain Sharing capability + group `dev.mnck.keymaster` are already configured), and build (⌘B). The CLI binary is inside the bundle at `Keymaster.app/Contents/MacOS/keymaster`.
 
 A plain `swiftc keymaster*.swift` build will **not** work: the biometric `kSecAttrAccessControl` requires the `keychain-access-groups` entitlement, an unsigned binary that adds without it gets `errSecMissingEntitlement` (-34018), and a binary that carries it without a provisioning profile is SIGKILLed by AMFI. The `.app` target is what supplies the profile.
 

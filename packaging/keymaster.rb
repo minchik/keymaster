@@ -10,6 +10,6 @@ cask "keymaster" do
   desc "Touch ID-gated macOS Keychain secrets, CLI"
   homepage "https://github.com/minchik/keymaster"
 
-  app "keymaster.app"
-  binary "#{appdir}/keymaster.app/Contents/MacOS/keymaster"
+  app "Keymaster.app"
+  binary "#{appdir}/Keymaster.app/Contents/MacOS/keymaster"
 end

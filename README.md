@@ -27,11 +27,11 @@ The biometric guard relies on a **restricted entitlement** (`keychain-access-gro
 
 1. Open `keymaster/keymaster.xcodeproj` in Xcode.
 2. Select the **keymaster** target ▸ **Signing & Capabilities** ▸ set your **Team** (automatic signing). The **Keychain Sharing** capability is already configured with the group `dev.mnck.keymaster`.
-3. Build (⌘B). The actual CLI lives inside the app bundle at `keymaster.app/Contents/MacOS/keymaster`.
+3. Build (⌘B). The actual CLI lives inside the app bundle at `Keymaster.app/Contents/MacOS/keymaster`.
 4. Put it on your `PATH`, e.g. symlink the inner binary:
 
    ```bash
-   ln -sf "/path/to/keymaster.app/Contents/MacOS/keymaster" /usr/local/bin/keymaster
+   ln -sf "/path/to/Keymaster.app/Contents/MacOS/keymaster" /usr/local/bin/keymaster
    ```
 
 Requires a Mac with Touch ID and an Apple signing identity configured in Xcode.

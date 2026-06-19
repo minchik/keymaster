@@ -3,7 +3,7 @@
 // This is an .app target only so the binary can carry the
 // `keychain-access-groups` entitlement (a restricted entitlement that AMFI
 // rejects on an unsigned/unprovisioned binary). At runtime it behaves as a
-// CLI: `keymaster.app/Contents/MacOS/keymaster <set|get|rm> <key>` does
+// CLI: `Keymaster.app/Contents/MacOS/keymaster <set|get|rm> <key>` does
 // its Keychain work and exits before any AppKit run loop starts, so no window
 // is shown.
 import Foundation
