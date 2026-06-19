@@ -50,14 +50,14 @@ func usage() {
 
 func main() {
   let inputArgs: [String] = Array(CommandLine.arguments.dropFirst())
-  if (inputArgs.count < 2 || inputArgs.count > 3) {
+  if inputArgs.count < 2 || inputArgs.count > 3 {
     usage()
     exit(EXIT_FAILURE) 
   }
   let action = inputArgs[0]
   let key = inputArgs[1]
   var secret = ""
-  if (action == "set" && inputArgs.count == 3) {
+  if action == "set" && inputArgs.count == 3 {
     secret = inputArgs[2]
   }
 
@@ -70,8 +70,8 @@ func main() {
     exit(EXIT_FAILURE)
   }
 
-  if (action == "set") {
-    context.evaluatePolicy(policy, localizedReason: "set to your password") { success, error in
+  if action == "set" {
+    context.evaluatePolicy(policy, localizedReason: "set to your password") { _, _ in
       guard setPassword(key: key, password: secret) else {
         print("Error setting password")
         exit(EXIT_FAILURE)
@@ -82,7 +82,7 @@ func main() {
     dispatchMain()
   }
 
-  if (action == "get") {
+  if action == "get" {
     context.evaluatePolicy(policy, localizedReason: "access to your password") { success, error in
       if success && error == nil {
         guard let password = getPassword(key: key) else {
@@ -100,7 +100,7 @@ func main() {
     dispatchMain()
   }
 
-  if (action == "delete") {
+  if action == "delete" {
     context.evaluatePolicy(policy, localizedReason: "delete your password") { success, error in
       if success && error == nil {
         guard deletePassword(key: key) else {
