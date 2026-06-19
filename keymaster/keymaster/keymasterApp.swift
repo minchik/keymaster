@@ -238,7 +238,7 @@ struct Keymaster: ParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "keymaster",
     abstract: "Store and retrieve Keychain secrets guarded by Touch ID.",
-    subcommands: [Set.self, Get.self, Remove.self, Run.self]
+    subcommands: [Set.self, Get.self, Remove.self, Run.self, Version.self]
   )
 }
 
@@ -275,6 +275,20 @@ extension Keymaster {
     func run() {
       let (status, data) = readItem(verb: "Read", key: key)
       print(secretString(status: status, data: data))
+    }
+  }
+
+  // Print keymaster's version. CFBundleShortVersionString is MARKETING_VERSION,
+  // which the release workflow sets from the git tag, so a released build reports
+  // its real version and a local build reports the project default.
+  struct Version: ParsableCommand {
+    static let configuration = CommandConfiguration(
+      abstract: "Print the version."
+    )
+
+    func run() {
+      let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+      print("keymaster \(version)")
     }
   }
 
