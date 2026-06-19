@@ -30,15 +30,32 @@ func authContext(verb: String, key: String) -> LAContext {
   return context
 }
 
-func setPassword(key: String, password: String) -> Bool {
-  let query: [String: Any] = [
+// Upsert a biometric-protected secret. The added item carries an access-control
+// object so the Keychain challenges for Touch ID on every later read/modify/delete.
+// On a duplicate, the existing item is updated (which prompts, naming the key).
+// Returns the raw OSStatus so the caller can report real failures.
+func setPassword(key: String, secret: Data) -> OSStatus {
+  guard let accessControl = makeAccessControl() else { return errSecParam }
+
+  let addQuery: [String: Any] = [
     kSecClass as String: kSecClassGenericPassword,
-    kSecAttrService as String: key,
-    kSecValueData as String: password
+    kSecAttrService as String: servicePrefix + key,
+    kSecAttrAccount as String: account,
+    kSecValueData as String: secret,
+    kSecAttrAccessControl as String: accessControl
   ]
 
-  let status = SecItemAdd(query as CFDictionary, nil)
-  return status == errSecSuccess
+  let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+  guard addStatus == errSecDuplicateItem else { return addStatus }
+
+  let matchQuery: [String: Any] = [
+    kSecClass as String: kSecClassGenericPassword,
+    kSecAttrService as String: servicePrefix + key,
+    kSecAttrAccount as String: account,
+    kSecUseAuthenticationContext as String: authContext(verb: "Update", key: key)
+  ]
+  let attributes: [String: Any] = [kSecValueData as String: secret]
+  return SecItemUpdate(matchQuery as CFDictionary, attributes as CFDictionary)
 }
 
 func deletePassword(key: String) -> Bool {
@@ -97,7 +114,7 @@ func main() {
 
   if action == "set" {
     context.evaluatePolicy(policy, localizedReason: "set to your password") { _, _ in
-      guard setPassword(key: key, password: secret) else {
+      guard setPassword(key: key, secret: Data(secret.utf8)) == errSecSuccess else {
         print("Error setting password")
         exit(EXIT_FAILURE)
       }
