@@ -38,6 +38,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				RunSupport.swift,
+				SecretManager.swift,
 			);
 			target = DA7B8B4B2FE580C700AB4D8F /* keymasterTests */;
 		};
