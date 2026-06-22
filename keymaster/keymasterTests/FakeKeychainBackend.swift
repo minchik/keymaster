@@ -34,8 +34,6 @@ final class FakeKeychainBackend: KeychainBackend {
   var store: [String: Data]
   // Ordered log of every primitive call, for asserting ordering invariants.
   private(set) var calls: [KeychainCall] = []
-  // Set to true once authenticate() has succeeded (a batch session was issued).
-  private(set) var authenticated = false
 
   // Programmable failures: when an entry is present, that op throws the given
   // error instead of running. `authenticateError`, when set, fails the one batch
@@ -52,10 +50,14 @@ final class FakeKeychainBackend: KeychainBackend {
 
   func add(key: String, secret: Data) throws {
     calls.append(.add(key))
-    if let error = addErrors[key] { throw error }
-    // Mirror the real backend: adding over a present key collides as .duplicate,
-    // which drives SecretManager's upsert path.
+    // Mirror the real backend: adding over a present key collides as .duplicate
+    // (driving SecretManager's upsert path) BEFORE any programmed failure is
+    // checked — the real SecItemAdd reports errSecDuplicateItem for a present item,
+    // not some unrelated error. Checking the duplicate first also lets a test fail
+    // only the upsert's re-add (set's second add, after the delete clears the key)
+    // without also tripping the first add.
     guard store[key] == nil else { throw KeychainError.duplicate }
+    if let error = addErrors[key] { throw error }
     store[key] = secret
   }
 
@@ -75,7 +77,6 @@ final class FakeKeychainBackend: KeychainBackend {
   func authenticate(reason: String) throws -> AuthSession {
     calls.append(.authenticate(reason: reason))
     if let error = authenticateError { throw error }
-    authenticated = true
     return FakeAuthSession()
   }
 

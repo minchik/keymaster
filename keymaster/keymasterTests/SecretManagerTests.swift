@@ -68,6 +68,40 @@ struct SecretManagerTests {
     #expect(backend.calls == [.add("K")])
   }
 
+  @Test func setDeleteFailureAbortsBeforeReAddLeavingOldSecret() {
+    // The authenticated read succeeds but the delete fails: the error must propagate
+    // and we must NOT re-add — so a half-completed overwrite leaves the old secret in
+    // place rather than wiping it. Guards the same "don't destroy on failure" intent
+    // as the cancelled-read case, one step later in the upsert.
+    let backend = FakeKeychainBackend(store: ["K": Data("old".utf8)])
+    backend.deleteErrors["K"] = .status("delete failed")
+    #expect(throws: KeychainError.status("delete failed")) {
+      try SecretManager(backend: backend).set(key: "K", secret: Data("new".utf8))
+    }
+    #expect(backend.calls == [.add("K"), .read("K", verb: "Update"), .delete("K")])
+    #expect(backend.store["K"] == Data("old".utf8))
+  }
+
+  @Test func setReAddFailureAfterDeletePropagates() {
+    // The inherent data-loss window of a non-atomic replace: read and delete succeed,
+    // then the re-add fails. The error must propagate (so the user learns the store
+    // failed) and the key is left absent. The fake fails only this second add because
+    // its duplicate check precedes the programmed-error check, so the first add still
+    // collides as .duplicate.
+    let backend = FakeKeychainBackend(store: ["K": Data("old".utf8)])
+    backend.addErrors["K"] = .status("disk full")
+    #expect(throws: KeychainError.status("disk full")) {
+      try SecretManager(backend: backend).set(key: "K", secret: Data("new".utf8))
+    }
+    #expect(backend.calls == [
+      .add("K"),
+      .read("K", verb: "Update"),
+      .delete("K"),
+      .add("K")
+    ])
+    #expect(backend.store["K"] == nil)
+  }
+
   // MARK: remove
 
   @Test func removeReadsBeforeDelete() throws {
@@ -143,6 +177,16 @@ struct SecretManagerTests {
     ])
   }
 
+  @Test func resolveEmptyMappingsAuthenticatesAndReturnsEmpty() throws {
+    // An empty batch still issues the single authenticate and returns no env vars.
+    // (The CLI's `run` validate() forbids zero --key, so this pins the orchestration
+    // contract directly rather than a reachable CLI path.)
+    let backend = FakeKeychainBackend()
+    let env = try SecretManager(backend: backend).resolveEnvironment(mappings: [], reason: "reason")
+    #expect(env == [:])
+    #expect(backend.calls == [.authenticate(reason: "reason")])
+  }
+
   @Test func resolveMapsEnvNamesToDecodedValues() throws {
     // "ENV=key" injects env ENV from keychain key 'key': the result is keyed by the
     // env name, valued by the decoded secret.
@@ -176,6 +220,21 @@ struct SecretManagerTests {
         reason: "reason"
       )
     }
+  }
+
+  @Test func resolveAbortsOnFirstUnreadableKeyNotReadingTheRest() {
+    // With multiple mappings, a failure on an early key must abort the whole batch
+    // immediately — the later keys are never read. This is what lets `run` fail fast
+    // naming the offending key BEFORE exec, instead of reading every secret first.
+    let backend = FakeKeychainBackend(store: ["a": Data("1".utf8), "b": Data("2".utf8)])
+    backend.readUsingErrors["a"] = .status("item not found")
+    #expect(throws: KeychainError.status("a: item not found")) {
+      _ = try SecretManager(backend: backend).resolveEnvironment(
+        mappings: [KeyMapping(env: "A", key: "a"), KeyMapping(env: "B", key: "b")],
+        reason: "reason"
+      )
+    }
+    #expect(backend.calls == [.authenticate(reason: "reason"), .readUsing("a")])
   }
 
   @Test func resolveNulValueAbortsNamingTheKey() {

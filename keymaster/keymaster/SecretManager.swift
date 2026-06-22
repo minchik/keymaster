@@ -25,14 +25,15 @@ import Foundation
 // `.status(SecCopyErrorMessageString(status))`, so no Security types leak into
 // this layer or its tests.
 nonisolated enum KeychainError: Error, Equatable {
-  case duplicate          // control-flow only (set upsert); never surfaced to the user
+  case duplicate          // set upsert control flow; only surfaces if a concurrent writer re-creates the key mid-upsert
   case noData             // success status but nil data
   case invalidData        // stored bytes are not valid UTF-8
   case containsNul        // env value has an embedded NUL
   case status(String)     // an OSStatus mapped to its SecCopyErrorMessageString text
 
-  // The user-facing message. `.duplicate` is internal control flow and never
-  // reaches the user, but carries a sensible string for completeness.
+  // The user-facing message. `.duplicate` normally stays internal to the `set`
+  // upsert, but can still reach the user if a concurrent writer re-creates the key
+  // between the upsert's delete and re-add, so it carries a real string too.
   var message: String {
     switch self {
     case .duplicate:
