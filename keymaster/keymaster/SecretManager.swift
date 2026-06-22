@@ -88,6 +88,77 @@ nonisolated protocol KeychainBackend {
   func read(key: String, using session: AuthSession) throws -> Data
 }
 
+// The testable orchestration over a `KeychainBackend`. The security-critical
+// ordering of primitive calls lives here (not in the adapter) so it can be
+// exercised against a fake: `set` is an upsert that forces an authenticated read
+// before overwriting; `remove` reads before it deletes; `resolveEnvironment`
+// authenticates once for the whole `run` batch and names the offending key on any
+// failure. Everything maps to the same observable behavior the pre-refactor CLI
+// had — same prompt verbs, same error text, same abort-before-exec.
+nonisolated struct SecretManager {
+  let backend: KeychainBackend
+
+  // Retrieve and decode a secret. The backend's `read` forces a Touch ID prompt
+  // (verb "Read") and throws `.noData`/`.status` on failure; non-UTF-8 bytes are
+  // rejected here as `.invalidData`. Mirrors the old get → `secretString` path.
+  func get(key: String) throws -> String {
+    let data = try backend.read(key: key, verb: "Read")
+    return try decodeSecret(data)
+  }
+
+  // Store a secret, upserting. A first create is a plain `add` — no read, so no
+  // Touch ID prompt. On a `.duplicate`, the existing item's ACL can't be trusted
+  // (another binary in the access group could have created it with a weaker one),
+  // so force an authenticated read (verb "Update", which prompts), then delete and
+  // re-add so the stored secret always carries our biometric ACL. The read is what
+  // gates the overwrite behind Touch ID; if it throws, we abort BEFORE deleting or
+  // re-adding — the existing secret is left intact. This ordering is the critical
+  // invariant and is asserted in the tests.
+  func set(key: String, secret: Data) throws {
+    do {
+      try backend.add(key: key, secret: secret)
+    } catch KeychainError.duplicate {
+      _ = try backend.read(key: key, verb: "Update")
+      try backend.delete(key: key)
+      try backend.add(key: key, secret: secret)
+    }
+  }
+
+  // Remove a secret. `delete` does not decrypt, so the biometric ACL would not
+  // challenge it on its own; force an authenticated read (verb "Remove", which
+  // prompts) first and delete only when it succeeds. A read failure aborts before
+  // the delete, so a cancelled prompt leaves the secret in place.
+  func remove(key: String) throws {
+    _ = try backend.read(key: key, verb: "Remove")
+    try backend.delete(key: key)
+  }
+
+  // Resolve a batch of `--key` mappings into an [env: value] dictionary for `run`,
+  // unlocking every secret with a SINGLE Touch ID prompt: `authenticate(reason:)`
+  // prompts once (its `reason` names every key and the program), then each secret
+  // is read through that pre-authenticated session without re-prompting. Last write
+  // wins when two mappings target the same env name. Any read or decode failure is
+  // re-thrown tagged "<key>: <message>" so the caller can abort before exec naming
+  // the offending key — matching the old `envSecret` text exactly. An `authenticate`
+  // failure throws before any read, so a cancelled prompt runs nothing.
+  func resolveEnvironment(
+    mappings: [KeyMapping],
+    reason: String
+  ) throws -> [String: String] {
+    let session = try backend.authenticate(reason: reason)
+    var injected: [String: String] = [:]
+    for mapping in mappings {
+      do {
+        let data = try backend.read(key: mapping.key, using: session)
+        injected[mapping.env] = try decodeEnvValue(data)
+      } catch let error as KeychainError {
+        throw KeychainError.status("\(mapping.key): \(error.message)")
+      }
+    }
+    return injected
+  }
+}
+
 // Decode stored bytes into the secret string. Non-UTF-8 is rejected because
 // secrets are stored and surfaced as text. Mirrors the old `secretString` decode.
 nonisolated func decodeSecret(_ data: Data) throws -> String {
