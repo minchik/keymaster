@@ -18,8 +18,8 @@ import Foundation
 import LocalAuthentication
 import Security
 
-let servicePrefix = "dev.mnck."
-let account = "keymaster"
+nonisolated let servicePrefix = "dev.mnck."
+nonisolated let account = "keymaster"
 
 // The real Keychain/biometric backend. Translates each primitive of the
 // `KeychainBackend` contract into the matching SecItem*/LAContext call and maps
@@ -90,14 +90,14 @@ nonisolated struct SystemKeychain: KeychainBackend {
 // `LAContext` shared by every read in a `run` batch so they unlock under one
 // prompt. Private to the adapter — the `AuthSession` protocol keeps
 // `LocalAuthentication` out of the SecretManager layer.
-private struct LAAuthSession: AuthSession {
+private nonisolated struct LAAuthSession: AuthSession {
   let context: LAContext
 }
 
 // Map a non-success `OSStatus` to a `KeychainError.status`, carrying the exact
 // `SecCopyErrorMessageString` text the pre-refactor `failKeychain` printed (with
 // the same "OSStatus <n>" fallback).
-private func statusError(_ status: OSStatus) -> KeychainError {
+private nonisolated func statusError(_ status: OSStatus) -> KeychainError {
   let message = SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
   return .status(message)
 }
@@ -107,7 +107,7 @@ private func statusError(_ status: OSStatus) -> KeychainError {
 // success status with nil data → `.noData` ("keychain returned no data"). UTF-8
 // validation stays in the SecretManager layer (`decodeSecret`/`decodeEnvValue`),
 // so this returns the raw `Data` unchanged.
-private func bytes(status: OSStatus, data: Data?) throws -> Data {
+private nonisolated func bytes(status: OSStatus, data: Data?) throws -> Data {
   guard status == errSecSuccess else { throw statusError(status) }
   guard let data = data else { throw KeychainError.noData }
   return data
