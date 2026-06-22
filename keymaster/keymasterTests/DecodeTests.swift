@@ -61,6 +61,10 @@ struct DecodeTests {
     #expect(KeychainError.containsNul.message
       == "stored secret contains a NUL byte and cannot be used as an environment variable")
     #expect(KeychainError.status("a message").message == "a message")
+    // `.duplicate` can surface only on the upsert re-add race; its text must equal
+    // SecCopyErrorMessageString(errSecDuplicateItem), which the pre-refactor
+    // failKeychain printed on that path.
+    #expect(KeychainError.duplicate.message == "The specified item already exists in the keychain.")
   }
 
 }

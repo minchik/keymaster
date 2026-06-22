@@ -33,11 +33,15 @@ nonisolated enum KeychainError: Error, Equatable {
 
   // The user-facing message. `.duplicate` normally stays internal to the `set`
   // upsert, but can still reach the user if a concurrent writer re-creates the key
-  // between the upsert's delete and re-add, so it carries a real string too.
+  // between the upsert's delete and re-add, so it carries a real string too. That
+  // string is the exact text `SecCopyErrorMessageString(errSecDuplicateItem)`
+  // returns, so this race prints byte-identically to the pre-refactor
+  // `failKeychain(errSecDuplicateItem)` (this Foundation-only layer can't call
+  // `SecCopyErrorMessageString` itself, so the text is mirrored here).
   var message: String {
     switch self {
     case .duplicate:
-      return "item already exists in the keychain"
+      return "The specified item already exists in the keychain."
     case .noData:
       return "keychain returned no data"
     case .invalidData:
