@@ -161,6 +161,55 @@ struct TokenExchangerTests {
     #expect(response.accessToken == "at")
   }
 
+  @Test func parseAcceptsNonStringRefreshTokenAsNoRotation() throws {
+    // Regression (same class as `expires_in`): a provider returning a non-string
+    // `refresh_token` (here a JSON number — non-conformant per RFC 6749 §5.1) used to
+    // make the whole TokenResponse decode throw `typeMismatch`, which the parser's
+    // `try?` swallowed into the misleading "no access_token" even though a valid
+    // access_token was present. The tolerant decode now treats it as "no rotation".
+    let json = """
+    { "access_token": "at", "refresh_token": 12345 }
+    """
+    let response = try parseTokenResponse(data: Data(json.utf8), status: 200)
+    #expect(response.accessToken == "at")
+    #expect(response.refreshToken == nil)
+  }
+
+  @Test func parseAcceptsBoolRefreshTokenAsNoRotation() throws {
+    // Same tolerance for a boolean `refresh_token`.
+    let json = """
+    { "access_token": "at", "refresh_token": true }
+    """
+    let response = try parseTokenResponse(data: Data(json.utf8), status: 200)
+    #expect(response.accessToken == "at")
+    #expect(response.refreshToken == nil)
+  }
+
+  @Test func parseTreatsNullRefreshTokenAsNoRotation() throws {
+    // An explicit JSON null is "no rotation" (nil), not an error — pins that the
+    // tolerant decode keeps the absent/null semantics intact.
+    let json = """
+    { "access_token": "at", "refresh_token": null }
+    """
+    let response = try parseTokenResponse(data: Data(json.utf8), status: 200)
+    #expect(response.accessToken == "at")
+    #expect(response.refreshToken == nil)
+  }
+
+  @Test func parseRejectsRefreshTokenContainingNul() {
+    // A NUL in the rotated refresh_token must be rejected at parse, symmetrically with
+    // the access_token guard: it would otherwise be persisted by OAuthManager's
+    // write-back (which bypasses storeSecret's NUL guard, and JSONSerialization encodes
+    // U+0000 as the "\u0000" escape so that guard would not catch it anyway), silently
+    // bricking the stored credential. The escape is built from a backslash code point
+    // so this source carries no raw NUL; JSONDecoder turns the escape into a NUL.
+    let backslash = String(UnicodeScalar(UInt8(92)))
+    let json = "{ \"access_token\": \"at\", \"refresh_token\": \"r\(backslash)u0000t\" }"
+    #expect(throws: KeychainError.status("token endpoint returned a refresh_token containing a NUL byte")) {
+      _ = try parseTokenResponse(data: Data(json.utf8), status: 200)
+    }
+  }
+
   // MARK: parseTokenResponse — empty / missing access_token
 
   @Test func parseRejectsEmptyAccessToken() {

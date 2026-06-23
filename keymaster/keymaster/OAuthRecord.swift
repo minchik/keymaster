@@ -55,10 +55,11 @@ nonisolated struct OAuthRecord: Codable, Equatable {
   }
 
   // Reject a record that could not produce a working token request: the three
-  // required fields must be non-empty and `token_endpoint` must parse as an `https`
-  // URL (a plain `http` endpoint or non-URL garbage is refused so a refresh token
-  // is never POSTed in the clear). Messages are un-prefixed; callers (`oauth set`)
-  // prepend context as needed. Throws `KeychainError.status` on the first failure.
+  // required fields must be non-empty, no field may contain an embedded NUL byte,
+  // and `token_endpoint` must parse as an `https` URL (a plain `http` endpoint or
+  // non-URL garbage is refused so a refresh token is never POSTed in the clear).
+  // Messages are un-prefixed; callers (`oauth set`) prepend context as needed.
+  // Throws `KeychainError.status` on the first failure.
   func validate() throws {
     guard !tokenEndpoint.isEmpty else {
       throw KeychainError.status("token_endpoint is required")
@@ -68,6 +69,24 @@ nonisolated struct OAuthRecord: Codable, Equatable {
     }
     guard !refreshToken.isEmpty else {
       throw KeychainError.status("refresh_token is required")
+    }
+    // Reject an embedded NUL in ANY field, required or optional. `oauth set` re-encodes
+    // the record with `JSONEncoder`, which escapes U+0000 to a six-character text escape
+    // rather than a literal `0x00` byte — so `storeSecret`'s write-time
+    // `secret.contains(0)` guard never sees it, and a NUL-bearing field would be
+    // persisted, re-decode with the NUL intact, and be re-sent (e.g. `refresh_token=…%00…`)
+    // on every later mint: a silently bricked credential. This is the same escaped-NUL
+    // bypass `parseTokenResponse` already rejects for the rotated refresh token; closing
+    // it here covers the creation path.
+    let fields: [(label: String, value: String?)] = [
+      ("token_endpoint", tokenEndpoint),
+      ("client_id", clientID),
+      ("client_secret", clientSecret),
+      ("refresh_token", refreshToken),
+      ("scopes", scopes)
+    ]
+    for field in fields where field.value?.contains("\0") == true {
+      throw KeychainError.status("\(field.label) must not contain a NUL byte")
     }
     guard let url = URL(string: tokenEndpoint),
           url.scheme?.lowercased() == "https",
@@ -90,5 +109,23 @@ nonisolated struct TokenResponse: Codable {
   enum CodingKeys: String, CodingKey {
     case accessToken = "access_token"
     case refreshToken = "refresh_token"
+  }
+}
+
+extension TokenResponse {
+  // Custom decode so a present-but-wrong-typed `refresh_token` (e.g. a JSON number
+  // or bool — non-conformant, since RFC 6749 §5.1 requires a string) is tolerated
+  // as "no rotation" (nil) rather than failing the whole decode. The synthesized
+  // `Decodable` would `decodeIfPresent(String.self, …)` and THROW `typeMismatch` on
+  // such a value, which `parseTokenResponse`'s `try?` then swallows into the
+  // misleading "no access_token" error — even though a valid `access_token` was
+  // present. This is the same hazard the unmodelled `token_type`/`expires_in` keys
+  // avoid by being dropped; `refresh_token` is modelled (rotation needs it), so it
+  // gets explicit tolerant handling here instead. `access_token` stays strictly
+  // required: a missing/non-string value is a real decode failure.
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    accessToken = try container.decode(String.self, forKey: .accessToken)
+    refreshToken = try? container.decodeIfPresent(String.self, forKey: .refreshToken)
   }
 }

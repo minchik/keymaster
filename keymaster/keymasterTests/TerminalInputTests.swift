@@ -88,6 +88,81 @@ struct TerminalInputTests {
     #expect(assembled == [0x61, 0x58])
   }
 
+  // MARK: line-kill (Ctrl-U) and word-erase (Ctrl-W)
+
+  @Test func ctrlUKillsWholeLine() {
+    // "abc" + Ctrl-U (0x15) -> "": canonical VKILL clears the line. The regression
+    // this guards: before ICANON was cleared the kernel did this; without the case
+    // the 0x15 byte would be appended raw into the (echo-off) secret.
+    let assembled = run([0x61, 0x62, 0x63, 0x15, 0x0A])
+    #expect(assembled == [])
+  }
+
+  @Test func ctrlUThenRetype() {
+    // "abc" + Ctrl-U + "xy" -> "xy": after the kill, typing resumes on a clean line.
+    let assembled = run([0x61, 0x62, 0x63, 0x15, 0x78, 0x79, 0x0A])
+    #expect(assembled == Array("xy".utf8))
+  }
+
+  @Test func ctrlUOnEmptyBufferIsNoOp() {
+    var buffer: [UInt8] = []
+    #expect(noEchoLineEvent(after: 0x15, into: &buffer) == .continue)
+    #expect(buffer.isEmpty)
+  }
+
+  @Test func ctrlUByteIsNeverAppendedToTheSecret() {
+    // The corruption regression, pinned directly: a 0x15 byte must never end up in
+    // the assembled line — it edits, it is not content.
+    let assembled = run(Array("hunter2".utf8) + [0x15, 0x0A])
+    #expect(assembled == [])
+    #expect(!(assembled ?? []).contains(0x15))
+  }
+
+  @Test func ctrlWErasesTrailingWord() {
+    // "foo bar" + Ctrl-W (0x17) -> "foo ": VWERASE deletes back to the previous blank.
+    let assembled = run(Array("foo bar".utf8) + [0x17, 0x0A])
+    #expect(assembled == Array("foo ".utf8))
+  }
+
+  @Test func ctrlWErasesWholeLineWhenNoBlank() {
+    // "foobar" + Ctrl-W -> "": with no blank, the word runs back to the start.
+    let assembled = run(Array("foobar".utf8) + [0x17, 0x0A])
+    #expect(assembled == [])
+  }
+
+  @Test func ctrlWSkipsTrailingBlanksBeforeErasingWord() {
+    // "foo bar   " + Ctrl-W -> "foo ": trailing blanks are dropped first, then the
+    // preceding word, matching canonical VWERASE.
+    let assembled = run(Array("foo bar   ".utf8) + [0x17, 0x0A])
+    #expect(assembled == Array("foo ".utf8))
+  }
+
+  @Test func ctrlWTreatsTabAsABlank() {
+    // A TAB (0x09) is a word boundary just like SPACE: "foo\tbar" + Ctrl-W -> "foo\t".
+    let assembled = run([0x66, 0x6F, 0x6F, 0x09, 0x62, 0x61, 0x72, 0x17, 0x0A])
+    #expect(assembled == [0x66, 0x6F, 0x6F, 0x09])
+  }
+
+  @Test func ctrlWOnEmptyBufferIsNoOp() {
+    var buffer: [UInt8] = []
+    #expect(noEchoLineEvent(after: 0x17, into: &buffer) == .continue)
+    #expect(buffer.isEmpty)
+  }
+
+  @Test func ctrlWErasesWholeMultiByteScalarsInTheWord() {
+    // A word of multi-byte scalars ("café🔐") + Ctrl-W must erase the whole run with
+    // no dangling partial scalar — the decoded remainder is just the leading blank.
+    let assembled = run(Array("a café🔐".utf8) + [0x17, 0x0A])
+    #expect(String(decoding: assembled!, as: UTF8.self) == "a ")
+  }
+
+  @Test func ctrlWByteIsNeverAppendedToTheSecret() {
+    // Companion to the Ctrl-U corruption pin: 0x17 must never appear in the line.
+    let assembled = run(Array("token".utf8) + [0x17, 0x0A])
+    #expect(assembled == [])
+    #expect(!(assembled ?? []).contains(0x17))
+  }
+
   // MARK: scalar-aware backspace (multi-byte UTF-8)
 
   @Test func backspaceErasesWholeTwoByteScalar() {

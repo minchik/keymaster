@@ -225,6 +225,33 @@ struct OAuthManagerTests {
     #expect(backend.storedData("rec", namespace: .oauth) == (try Self.record.encoded()))
   }
 
+  @Test func getDoesNotPersistRotatedRefreshTokenContainingNul() throws {
+    // Defense-in-depth at the write boundary: a (non-conformant) exchanger that returns a
+    // rotated refresh token carrying a NUL must NOT have it persisted — JSONSerialization
+    // would escape U+0000 to a six-character text escape, slipping past storeSecret's byte
+    // guard and silently bricking the stored record. The write-back is skipped (no
+    // `updateUsing`), the just-minted access token is still returned, and the stale flag is
+    // set so the CLI warns. The NUL is built from a code point so this source carries no
+    // raw NUL byte.
+    let nul = String(UnicodeScalar(UInt8(0)))
+    let backend = try Self.seededBackend()
+    let exchanger = FakeTokenExchanger(response: TokenResponse(
+      accessToken: "at-still-good", refreshToken: "rotated" + nul + "refresh"
+    ))
+    let result = try OAuthManager(backend: backend, exchanger: exchanger)
+      .resolveSecret(name: "rec", reason: Self.getReason)
+
+    #expect(result.value == "at-still-good")
+    #expect(result.refreshTokenStale == true)
+    #expect(backend.calls == [
+      .authenticate(reason: Self.getReason),
+      .existsUsing("rec", namespace: .oauth),
+      .readUsing("rec", namespace: .oauth)
+    ])
+    // The stored record keeps its ORIGINAL refresh token — the NUL-bearing one was discarded.
+    #expect(backend.storedData("rec", namespace: .oauth) == (try Self.record.encoded()))
+  }
+
   // MARK: get path — non-fatal write-back failure
 
   @Test func getWriteBackFailureReturnsTokenWithStaleFlagAndDoesNotThrow() throws {

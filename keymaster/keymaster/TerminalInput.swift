@@ -44,20 +44,23 @@ nonisolated enum NoEchoLineEvent: Equatable {
 //                                  line, matching a canonical-mode Ctrl-D).
 //   - DEL (`0x7F`) / BS (`0x08`) → erase the last UTF-8 scalar; a no-op on an empty
 //                                  buffer.
+//   - NAK / Ctrl-U (`0x15`)      → kill the whole line (canonical VKILL); a no-op on
+//                                  an empty buffer.
+//   - ETB / Ctrl-W (`0x17`)      → erase the trailing word (canonical VWERASE): drop
+//                                  trailing blanks, then back to the previous blank
+//                                  (or the start of the line); a no-op on an empty
+//                                  buffer.
 //   - any other byte             → append it; `continue`.
 //
-// The erase removes one whole UTF-8 *scalar*, not a single raw byte: pop the last
-// byte, then keep popping while the byte just removed was a continuation byte
-// (`b & 0xC0 == 0x80`), the buffer is non-empty, and fewer than 4 bytes (the max
-// UTF-8 scalar length) have been popped. For well-formed input this removes exactly
-// one scalar, so a backspace inside a multi-byte character can never leave a dangling
-// partial sequence that would decode to U+FFFD and silently corrupt the secret. The
-// 4-byte cap bounds a malformed all-continuation tail: a single backspace removes at
-// most 4 bytes, never walking back across what should be several characters. A
-// grapheme cluster made of several scalars (e.g. an emoji + variation selector)
-// erases one scalar per press — an accepted ergonomic caveat, distinct from the
-// corruption bug this fixes. The buffer holds raw bytes; the caller decodes the
-// whole line as UTF-8 once on `endLine`.
+// Ctrl-U / Ctrl-W are handled here because clearing `ICANON` (to drop the MAX_CANON
+// cap) also turns off the kernel's VKILL/VWERASE editing — without these cases those
+// bytes would fall through to `default:` and be silently appended as `0x15`/`0x17`
+// into the (echo-off) secret, corrupting a value the user thought they had erased.
+//
+// The erase actions (DEL/BS and Ctrl-W) work on whole UTF-8 *scalars*, not raw bytes,
+// so an edit inside a multi-byte character can never leave a dangling partial sequence
+// that would decode to U+FFFD — see `eraseLastScalar`/`eraseLastWord`. The buffer
+// holds raw bytes; the caller decodes the whole line as UTF-8 once on `endLine`.
 nonisolated func noEchoLineEvent(after byte: UInt8, into buffer: inout [UInt8]) -> NoEchoLineEvent {
   switch byte {
   case 0x0A, 0x0D:
@@ -65,18 +68,55 @@ nonisolated func noEchoLineEvent(after byte: UInt8, into buffer: inout [UInt8]) 
   case 0x04:
     return buffer.isEmpty ? .endInput : .endLine
   case 0x7F, 0x08:
-    guard !buffer.isEmpty else { return .continue }
-    var removed = 0
-    while !buffer.isEmpty && removed < 4 {
-      let last = buffer.removeLast()
-      removed += 1
-      // Stop once we've removed a lead/ASCII byte; only continuation bytes
-      // (0b10xxxxxx) keep the scalar open.
-      if last & 0xC0 != 0x80 { break }
-    }
+    eraseLastScalar(from: &buffer)
+    return .continue
+  case 0x15:
+    // Ctrl-U (VKILL): kill the whole line.
+    buffer.removeAll(keepingCapacity: true)
+    return .continue
+  case 0x17:
+    eraseLastWord(from: &buffer)
     return .continue
   default:
     buffer.append(byte)
     return .continue
+  }
+}
+
+// Erase the last whole UTF-8 scalar (the DEL/BS action): pop the last byte, then keep
+// popping while the byte just removed was a continuation byte (`b & 0xC0 == 0x80`),
+// the buffer is non-empty, and fewer than 4 bytes (the max UTF-8 scalar length) have
+// been popped. For well-formed input this removes exactly one scalar, so a backspace
+// inside a multi-byte character can never leave a dangling partial sequence that would
+// decode to U+FFFD and silently corrupt the secret. The 4-byte cap bounds a malformed
+// all-continuation tail: a single backspace removes at most 4 bytes, never walking back
+// across what should be several characters. A grapheme cluster made of several scalars
+// (e.g. an emoji + variation selector) erases one scalar per press — an accepted
+// ergonomic caveat, distinct from the corruption bug this fixes. A no-op on an empty
+// buffer.
+private nonisolated func eraseLastScalar(from buffer: inout [UInt8]) {
+  guard !buffer.isEmpty else { return }
+  var removed = 0
+  while !buffer.isEmpty && removed < 4 {
+    let last = buffer.removeLast()
+    removed += 1
+    // Stop once we've removed a lead/ASCII byte; only continuation bytes
+    // (0b10xxxxxx) keep the scalar open.
+    if last & 0xC0 != 0x80 { break }
+  }
+}
+
+// Erase the trailing word (the Ctrl-W action / canonical VWERASE): drop trailing
+// blanks, then everything back to the previous blank (or the start of the line).
+// Scanning raw bytes for a blank is scalar-safe — SPACE (0x20) and TAB (0x09) are
+// ASCII, so they can never appear inside a multi-byte UTF-8 sequence (lead/continuation
+// bytes are all >= 0x80) — and the word run is removed whole, so no partial scalar is
+// ever left behind. A no-op on an empty buffer.
+private nonisolated func eraseLastWord(from buffer: inout [UInt8]) {
+  while let last = buffer.last, last == 0x20 || last == 0x09 {
+    buffer.removeLast()
+  }
+  while let last = buffer.last, last != 0x20 && last != 0x09 {
+    buffer.removeLast()
   }
 }

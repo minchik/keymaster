@@ -202,6 +202,102 @@ struct OAuthRecordTests {
     }
   }
 
+  // MARK: validate — embedded-NUL rejection (the escaped-NUL bypass)
+
+  @Test func validateRejectsNulInRefreshToken() {
+    // THE headline case: a NUL in refresh_token survives a JSON round-trip (JSONEncoder
+    // re-escapes U+0000 to backslash-u-0000, so storeSecret's byte-level contains(0)
+    // guard misses it). validate() must reject it before storage. The NUL is built from
+    // a code point so this source carries no raw NUL byte.
+    let nul = String(UnicodeScalar(UInt8(0)))
+    let record = OAuthRecord(
+      tokenEndpoint: "https://example.com/token",
+      clientID: "id",
+      clientSecret: nil,
+      refreshToken: "r" + nul + "t",
+      scopes: nil
+    )
+    #expect(throws: KeychainError.status("refresh_token must not contain a NUL byte")) {
+      try record.validate()
+    }
+  }
+
+  @Test func validateRejectsNulInTokenEndpoint() {
+    // A NUL in token_endpoint is caught by the NUL check (a clearer message than the
+    // generic https-URL rejection that would otherwise fire).
+    let nul = String(UnicodeScalar(UInt8(0)))
+    let record = OAuthRecord(
+      tokenEndpoint: "https://example.com/" + nul + "token",
+      clientID: "id",
+      clientSecret: nil,
+      refreshToken: "tok",
+      scopes: nil
+    )
+    #expect(throws: KeychainError.status("token_endpoint must not contain a NUL byte")) {
+      try record.validate()
+    }
+  }
+
+  @Test func validateRejectsNulInClientID() {
+    let nul = String(UnicodeScalar(UInt8(0)))
+    let record = OAuthRecord(
+      tokenEndpoint: "https://example.com/token",
+      clientID: "i" + nul + "d",
+      clientSecret: nil,
+      refreshToken: "tok",
+      scopes: nil
+    )
+    #expect(throws: KeychainError.status("client_id must not contain a NUL byte")) {
+      try record.validate()
+    }
+  }
+
+  @Test func validateRejectsNulInOptionalClientSecret() {
+    // Optional fields are checked too: a present-but-NUL client_secret is rejected.
+    let nul = String(UnicodeScalar(UInt8(0)))
+    let record = OAuthRecord(
+      tokenEndpoint: "https://example.com/token",
+      clientID: "id",
+      clientSecret: "s" + nul + "s",
+      refreshToken: "tok",
+      scopes: nil
+    )
+    #expect(throws: KeychainError.status("client_secret must not contain a NUL byte")) {
+      try record.validate()
+    }
+  }
+
+  @Test func validateRejectsNulInOptionalScopes() {
+    let nul = String(UnicodeScalar(UInt8(0)))
+    let record = OAuthRecord(
+      tokenEndpoint: "https://example.com/token",
+      clientID: "id",
+      clientSecret: nil,
+      refreshToken: "tok",
+      scopes: "read" + nul + "write"
+    )
+    #expect(throws: KeychainError.status("scopes must not contain a NUL byte")) {
+      try record.validate()
+    }
+  }
+
+  @Test func validateRejectsNulDecodedFromJsonEscape() throws {
+    // End-to-end realistic path: the value arrives as the JSON backslash-u-0000 escape
+    // (exactly what a piped `oauth set` record could carry), JSONDecoder turns it into a
+    // string with U+0000, and validate() rejects it — proving the creation-path bypass is
+    // closed for real input, not just literal-NUL Swift strings. The escape is built from
+    // a backslash code point so this source carries no raw NUL.
+    let backslash = String(UnicodeScalar(UInt8(92)))
+    let json = """
+    { "token_endpoint": "https://example.com/token", "client_id": "id", "refresh_token": "r\(backslash)u0000t" }
+    """
+    let record = try decode(json)
+    #expect(record.refreshToken == "r" + String(UnicodeScalar(UInt8(0))) + "t")
+    #expect(throws: KeychainError.status("refresh_token must not contain a NUL byte")) {
+      try record.validate()
+    }
+  }
+
   // MARK: encoded round-trip
 
   @Test func encodeDecodeRoundTrips() throws {

@@ -182,6 +182,18 @@ nonisolated struct OAuthManager {
       return MintResult(accessToken: response.accessToken, refreshTokenStale: false)
     }
 
+    // Defense-in-depth: never PERSIST a rotated refresh token carrying a NUL. The
+    // shipping exchanger (`parseTokenResponse`) already rejects this, but the
+    // `TokenExchanger` protocol does not require it, so re-assert at THIS write boundary —
+    // `JSONSerialization` escapes U+0000 to a six-character text escape, slipping past
+    // `storeSecret`'s byte-level guard (which the rotation path bypasses anyway) and
+    // silently bricking the stored record. Skip the write-back and flag stale: the
+    // just-minted access token is still good, but the rotation could not be saved, so the
+    // CLI warns the user to re-run `oauth set` (same non-fatal contract as a failed update).
+    guard !rotated.contains("\0") else {
+      return MintResult(accessToken: response.accessToken, refreshTokenStale: true)
+    }
+
     // Lossless write-back: edit `refresh_token` IN the raw stored JSON object
     // rather than re-encoding the 5-field model, so any extra/unknown keys an
     // out-of-band write stored survive the rotation. `recordData` is guaranteed a

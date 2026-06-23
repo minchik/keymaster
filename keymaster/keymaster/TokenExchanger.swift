@@ -106,6 +106,17 @@ nonisolated func parseTokenResponse(data: Data, status: Int) throws -> TokenResp
     guard !response.accessToken.contains("\0") else {
       throw KeychainError.status("token endpoint returned an access_token containing a NUL byte")
     }
+    // Reject a NUL in the rotated refresh_token too, symmetrically. It would
+    // otherwise be persisted by `OAuthManager`'s rotation write-back, which calls
+    // `backend.update` directly — bypassing `storeSecret`'s write-time NUL guard —
+    // and would survive that guard anyway, because `JSONSerialization` encodes
+    // U+0000 as the `\u0000` escape rather than a literal `0x00` byte. The result
+    // would be a silently bricked stored credential that re-decodes with the NUL
+    // intact and is re-sent as `%00` on every later mint. Catching it here, the one
+    // choke point all minted/rotated tokens pass through, keeps the stored record clean.
+    if let refresh = response.refreshToken, refresh.contains("\0") {
+      throw KeychainError.status("token endpoint returned a refresh_token containing a NUL byte")
+    }
     return response
   }
 
