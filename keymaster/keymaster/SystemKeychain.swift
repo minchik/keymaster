@@ -57,8 +57,8 @@ private nonisolated func servicePrefix(for namespace: KeychainNamespace) -> Stri
 // Security types leak past this adapter.
 nonisolated struct SystemKeychain: KeychainBackend {
   // Add a biometric-protected item. The added item carries an access-control
-  // object so the Keychain challenges for Touch ID on every later
-  // read/modify/remove. A pre-existing item surfaces as `.duplicate` so the
+  // object so the Keychain challenges for Touch ID OR a paired Apple Watch on
+  // every later read/modify/remove. A pre-existing item surfaces as `.duplicate` so the
   // caller's upsert path (read→delete→add) can replace it under our ACL rather
   // than preserving whatever ACL the existing item carried. A nil access control
   // maps to the `errSecParam` text the old `setPassword` returned.
@@ -168,9 +168,10 @@ nonisolated struct SystemKeychain: KeychainBackend {
   // Replace an item's stored bytes in place via SecItemUpdate, THROUGH a
   // pre-authenticated session. This rewrites only kSecValueData, leaving the access
   // control intact, and does NOT decrypt the existing value. It still touches a
-  // `.biometryAny`-protected item, so it attaches the session's authenticated context
-  // via kSecUseAuthenticationContext — the in-place write rides the caller's single
-  // approval (atomic and prompt-free) instead of provoking a SEPARATE Touch ID prompt.
+  // biometric/watch-protected item (the `[.biometryAny, .or, .companion]` ACL), so it
+  // attaches the session's authenticated context via kSecUseAuthenticationContext — the
+  // in-place write rides the caller's single approval (atomic and prompt-free) instead
+  // of provoking a SEPARATE Touch ID / Apple Watch prompt.
   // This is the rotation write-back's path under the authenticate-first `get`/`run`
   // resolver. A non-success status (e.g. errSecItemNotFound when the item is absent)
   // maps to `.status`.
@@ -214,7 +215,11 @@ private nonisolated func bytes(status: OSStatus, data: Data?) throws -> Data {
 }
 
 // Build a biometric access-control object so the Keychain itself challenges for
-// Touch ID on every read/modify/remove. Returns nil if creation fails.
+// Touch ID OR a paired Apple Watch (side-button double-click) on every
+// read/modify/remove. The `[.biometryAny, .or, .companion]` flags add the watch
+// as a second *presence* factor; no passcode fallback is introduced
+// (`.userPresence`/`.devicePasscode` are deliberately not used). Returns nil if
+// creation fails.
 nonisolated func makeAccessControl() -> SecAccessControl? {
   // Success is indicated by a non-nil return value, per the Security API
   // contract; a nil return (with the error populated) means creation failed.
@@ -236,9 +241,10 @@ nonisolated func authContext(verb: String, key: String) -> LAContext {
 }
 
 // Pre-authenticate ONE LAContext so a whole batch of secrets (the `run`
-// subcommand) can be read with a SINGLE Touch ID prompt.
-// evaluateAccessControl(.useItem) forces one fresh biometric challenge; the
-// returned context is then handed to each readItem via
+// subcommand) can be read with a SINGLE Touch ID / Apple Watch prompt.
+// evaluateAccessControl(.useItem) forces one fresh biometric-grade challenge
+// (Touch ID OR a paired Apple Watch, per the `[.biometryAny, .or, .companion]`
+// ACL); the returned context is then handed to each readItem via
 // kSecUseAuthenticationContext, and the Keychain reuses that authentication for
 // every item instead of re-prompting. Returns nil if the user cancels or auth
 // fails, so the caller aborts before launching the command.
@@ -247,7 +253,7 @@ nonisolated func authContext(verb: String, key: String) -> LAContext {
 // (0). The single prompt comes solely from sharing one already-authenticated
 // context, NOT from a reuse time window in which a recent device unlock could
 // satisfy a read — so keymaster's guarantee that every secret access forces a
-// fresh Touch ID is preserved.
+// fresh Touch ID / Apple Watch approval is preserved.
 //
 // Concurrency: evaluateAccessControl(...:reply:) is async, so this bridges it to a
 // synchronous flow with a DispatchSemaphore. This function is `nonisolated`, so

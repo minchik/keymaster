@@ -143,10 +143,11 @@ nonisolated protocol KeychainBackend {
   // rides the caller's single approval (atomic, no extra prompt). Lets the rotation
   // write-back persist a new refresh token under the same prompt that authorized the
   // read, instead of triggering a separate biometric challenge. This is the only
-  // `update` form: on a `.biometryAny` item a context-less update would modify the
+  // `update` form: on a biometric/watch-protected item (the
+  // `[.biometryAny, .or, .companion]` ACL) a context-less update would modify the
   // protected item WITHOUT the caller's approval, so the OS would authorize it
-  // separately — a SECOND Touch ID prompt — which is exactly what the session-aware
-  // form avoids. Throws `.status` if the item is absent or the update fails.
+  // separately — a SECOND Touch ID / Apple Watch prompt — which is exactly what the
+  // session-aware form avoids. Throws `.status` if the item is absent or the update fails.
   func update(key: String, secret: Data, using session: AuthSession, namespace: KeychainNamespace) throws
 }
 
