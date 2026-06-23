@@ -7,6 +7,7 @@ included:
   - keymaster/keymaster/SecretManager.swift
   - keymaster/keymaster/SystemKeychain.swift
   - keymaster/keymaster/OAuthRecord.swift
+  - keymaster/keymaster/TokenExchanger.swift
 
 disabled_rules:
   - todo
