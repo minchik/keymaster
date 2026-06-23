@@ -9,6 +9,7 @@ included:
   - keymaster/keymaster/OAuthRecord.swift
   - keymaster/keymaster/TokenExchanger.swift
   - keymaster/keymaster/OAuthManager.swift
+  - keymaster/keymaster/URLSessionTokenExchanger.swift
 
 disabled_rules:
   - todo
