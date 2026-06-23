@@ -6,6 +6,7 @@ included:
   - keymaster/keymaster/RunSupport.swift
   - keymaster/keymaster/SecretManager.swift
   - keymaster/keymaster/SystemKeychain.swift
+  - keymaster/keymaster/OAuthRecord.swift
 
 disabled_rules:
   - todo
