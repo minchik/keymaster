@@ -25,3 +25,10 @@ line_length:
 function_body_length:
   warning: 80
   error: 120
+
+# keymasterApp.swift carries the CLI surface for every subcommand (set/get/rm/run
+# plus the oauth group) with the project's heavy explanatory comments, so it runs
+# past the 400-line default. Raise the threshold rather than thin the documentation.
+file_length:
+  warning: 600
+  error: 800

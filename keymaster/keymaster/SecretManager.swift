@@ -203,31 +203,6 @@ nonisolated struct SecretManager {
     _ = try backend.read(key: key, verb: "Remove", namespace: namespace)
     try backend.delete(key: key, namespace: namespace)
   }
-
-  // Resolve a batch of `--key` mappings into an [env: value] dictionary for `run`,
-  // unlocking every secret with a SINGLE Touch ID prompt: `authenticate(reason:)`
-  // prompts once (its `reason` names every key and the program), then each secret
-  // is read through that pre-authenticated session without re-prompting. Last write
-  // wins when two mappings target the same env name. Any read or decode failure is
-  // re-thrown tagged "<key>: <message>" so the caller can abort before exec naming
-  // the offending key — matching the old `envSecret` text exactly. An `authenticate`
-  // failure throws before any read, so a cancelled prompt runs nothing.
-  func resolveEnvironment(
-    mappings: [KeyMapping],
-    reason: String
-  ) throws -> [String: String] {
-    let session = try backend.authenticate(reason: reason)
-    var injected: [String: String] = [:]
-    for mapping in mappings {
-      do {
-        let data = try backend.read(key: mapping.key, using: session, namespace: namespace)
-        injected[mapping.env] = try decodeEnvValue(data)
-      } catch let error as KeychainError {
-        throw KeychainError.status("\(mapping.key): \(error.message)")
-      }
-    }
-    return injected
-  }
 }
 
 // Store `secret` under `name` in `target`, refusing if `name` already lives in the

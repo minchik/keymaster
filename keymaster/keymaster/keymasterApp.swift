@@ -28,13 +28,33 @@ func readSecret(for key: String) -> String? {
     return secret
   }
   FileHandle.standardError.write(Data("Secret for \"\(key)\": ".utf8))
+  return readLineWithEchoOff()
+}
+
+// Read one line from a TTY with terminal echo disabled, so a typed secret never
+// appears on screen. Reads in NON-canonical mode: the terminal's canonical
+// (line-buffered) discipline caps one input line at `MAX_CANON` = 1024 bytes, so a
+// longer pasted `refresh_token`/`client_secret` rings the bell and the overflow is
+// silently discarded (and truncated if Enter is pressed). Clearing `ICANON`
+// alongside `ECHO` lifts that cap; the cost is that the line editing the tty used to
+// do for us (append / backspace / line terminators) must now be done by hand, so we
+// read one byte at a time through the pure `noEchoLineEvent(after:into:)` reducer and
+// decode the assembled bytes as UTF-8 once at the end. `VMIN`=1/`VTIME`=0 make each
+// `read()` block for at least one byte with no inter-byte timer. A signal-interrupted
+// `read()` (`EINTR`) is retried rather than treated as fatal, restoring the resilience
+// the canonical `readLine()` had: its `getline` wrapper loops on EINTR, so a Ctrl-Z
+// suspend / `fg` resume (or any signal delivered mid-read) resumes the prompt instead
+// of aborting a half-typed secret. `ISIG` is left set, so Ctrl-C still interrupts. The
+// caller writes any prompt to stderr first; this restores the original terminal
+// settings and emits the suppressed newline on the way out. Aborts rather than falling
+// through with echo on, which would print the secret.
+func readLineWithEchoOff() -> String? {
   var original = termios()
   guard tcgetattr(STDIN_FILENO, &original) == 0 else {
     fail("could not read terminal settings")
   }
   var noEcho = original
   noEcho.c_lflag &= ~tcflag_t(ECHO)
-  // Abort rather than fall through with echo on, which would print the secret.
   guard tcsetattr(STDIN_FILENO, TCSAFLUSH, &noEcho) == 0 else {
     fail("could not disable terminal echo")
   }
@@ -77,7 +97,7 @@ struct Keymaster: ParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "keymaster",
     abstract: "Store and retrieve Keychain secrets guarded by Touch ID.",
-    subcommands: [Set.self, Get.self, Remove.self, Run.self, Version.self]
+    subcommands: [Set.self, Get.self, Remove.self, Run.self, OAuth.self, Version.self]
   )
 }
 
@@ -97,9 +117,14 @@ extension Keymaster {
       guard let secret = readSecret(for: key), !secret.isEmpty else {
         fail("no secret provided")
       }
-      let manager = SecretManager(backend: SystemKeychain())
+      let keychain = SystemKeychain()
       do {
-        try manager.set(key: key, secret: Data(secret.utf8))
+        // Symmetric cross-namespace guard: a name lives in exactly one store, so if this
+        // name already holds an OAuth record, refuse rather than overwrite it. `storeSecret`
+        // runs a no-prompt `exists` probe of the OAuth namespace FIRST and throws
+        // `.crossNamespaceConflict` (naming the `oauth rm` command) without writing anything;
+        // otherwise it upserts the plain secret as today.
+        try storeSecret(Data(secret.utf8), name: key, in: .secret, conflictingWith: .oauth, backend: keychain)
       } catch let error as KeychainError {
         fail(error.message)
       } catch {
@@ -109,19 +134,32 @@ extension Keymaster {
     }
   }
 
-  // Retrieve a secret; the Keychain challenges Touch ID on the read.
+  // Retrieve a secret, OR mint a fresh access token for an OAuth record, under a
+  // SINGLE Touch ID prompt. The resolver authenticates ONCE, then classifies the
+  // name's namespace THROUGH that session (no separate probe prompt): a plain secret
+  // is read and printed as-is; an OAuth record is exchanged for a fresh access token
+  // (printed to stdout, with any rotated-but-unsaved warning on stderr — so
+  // `$(keymaster get X)` stays clean). Classifying under the one approval is the
+  // intended security property: keymaster never reveals whether a name exists without
+  // a biometric approval first. So a name in neither store aborts AFTER the one prompt
+  // with a deliberate, key-prefixed "not found" — the absence is not leaked before the
+  // prompt. The resolver already prefixes its errors with the key, so this surfaces
+  // them verbatim.
   struct Get: ParsableCommand {
     static let configuration = CommandConfiguration(
-      abstract: "Retrieve a secret, gated by Touch ID."
+      abstract: "Retrieve a secret or mint an OAuth access token, gated by Touch ID."
     )
 
     @Argument(help: "The key to retrieve.")
     var key: String
 
     func run() {
-      let manager = SecretManager(backend: SystemKeychain())
+      let keychain = SystemKeychain()
+      let oauth = OAuthManager(backend: keychain, exchanger: URLSessionTokenExchanger())
       do {
-        print(try manager.get(key: key))
+        let result = try oauth.resolveSecret(name: key, reason: "Read keychain secret: \"\(key)\"")
+        if result.refreshTokenStale { warnStaleRefreshToken(key) }
+        print(result.value)
       } catch let error as KeychainError {
         fail(error.message)
       } catch {
@@ -168,11 +206,16 @@ extension Keymaster {
   }
 
   // Run a command with keychain secrets injected as environment variables, all
-  // unlocked by a SINGLE Touch ID prompt. Each `--key` names a secret to read and
-  // the env var to inject it as (see parseKeyMapping); the trailing command after
-  // `--` is exec'd with those vars merged over the current environment. Any
-  // unreadable key aborts before the command runs, so it never launches with a
-  // silently-missing secret.
+  // unlocked by a SINGLE Touch ID prompt. Each `--key` names a value to inject and
+  // the env var to inject it as (see parseKeyMapping); a plain-secret key is read
+  // as-is, an OAuth-record key is exchanged for a fresh access token. The resolver
+  // authenticates ONCE, then classifies every name's namespace THROUGH that session.
+  // Classifying under the one approval is the intended security property: a name's
+  // existence is never disclosed without a biometric approval first. So a name in
+  // neither store aborts AFTER the one prompt (but still before exec) — it never
+  // launches with a silently-missing secret, and never leaks the name's absence
+  // before the prompt. The trailing command after `--` is exec'd with those vars
+  // merged over the current environment.
   struct Run: ParsableCommand {
     static let configuration = CommandConfiguration(
       abstract: "Run a command with keychain secrets injected as env vars (one Touch ID prompt)."
@@ -214,20 +257,186 @@ extension Keymaster {
       let program = command.first ?? ""
       let names = mappings.map { "\"\($0.key)\"" }.joined(separator: ", ")
       let reason = "Run \"\(program)\" with keychain secrets: \(names)"
-      // resolveEnvironment authenticates once (the single prompt) and reads every
-      // secret through it, aborting before exec if any read/decode fails — its
-      // error names the offending key. Last write wins for a duplicated env name.
-      let manager = SecretManager(backend: SystemKeychain())
+      let keychain = SystemKeychain()
+      let oauth = OAuthManager(backend: keychain, exchanger: URLSessionTokenExchanger())
+      // resolveRunEnvironment authenticates once (the single prompt) and resolves
+      // every mapping THROUGH that session — classifying each name's namespace,
+      // reading+decoding `.secret` keys, and minting `.oauth` keys into a fresh access
+      // token — aborting before exec if any classify/read/mint/decode fails or a name
+      // is in neither store (its error names the offending key). The classify now rides
+      // the single approval, so a missing key aborts after the prompt rather than before
+      // it. Last write wins for a duplicated env name. A key whose rotated refresh token
+      // failed to persist is reported in staleKeys (non-fatal): warn on stderr and
+      // proceed with the still-valid token.
       let injected: [String: String]
+      let staleKeys: [String]
       do {
-        injected = try manager.resolveEnvironment(mappings: mappings, reason: reason)
+        (injected, staleKeys) = try oauth.resolveRunEnvironment(mappings: mappings, reason: reason)
       } catch let error as KeychainError {
         fail(error.message)
       } catch {
         fail(error.localizedDescription)
       }
+      for key in staleKeys { warnStaleRefreshToken(key) }
       // Qualify exit so it resolves to libc's, not ParsableCommand.exit(withError:).
       Foundation.exit(runProcess(command: command, extraEnv: injected))
+    }
+  }
+}
+
+// Warn loudly on stderr that the provider rotated the refresh token but persisting
+// the new one failed (the in-place keychain update did not stick). The just-minted
+// access token is still valid for this use, so this is a NON-fatal heads-up, not an
+// abort — the caller still emits the token. Shared by `get` and `run`.
+func warnStaleRefreshToken(_ key: String) {
+  let message = "Warning: \"\(key)\" rotated its refresh token but the new one could not be saved; "
+    + "re-run `keymaster oauth set \(key)` to store it.\n"
+  FileHandle.standardError.write(Data(message.utf8))
+}
+
+// Map "" (and nil) to nil so an empty answer for an optional OAuth field
+// (client_secret, scopes) is stored as absent rather than an empty string.
+func emptyToNil(_ value: String?) -> String? {
+  guard let value = value, !value.isEmpty else { return nil }
+  return value
+}
+
+// Prompt on stderr for one OAuth-record field and read it from the TTY. Secret
+// fields (client_secret, refresh_token) are read with echo disabled — reusing
+// readSecret's no-echo handling — so they never appear on screen; the rest echo
+// normally. Returns the typed line (empty allowed; validate() rejects empty
+// required fields), or nil only on EOF.
+func promptField(_ label: String, secret: Bool) -> String? {
+  FileHandle.standardError.write(Data("\(label): ".utf8))
+  return secret ? readLineWithEchoOff() : readLine(strippingNewline: true)
+}
+
+// Build an OAuthRecord by prompting for each field on a TTY. Required fields default
+// to "" on EOF so validate() surfaces the proper "<field> is required" message;
+// empty optional fields collapse to nil. Field content is not checked here — the
+// caller runs record.validate() before storing.
+func readOAuthRecordInteractively() -> OAuthRecord {
+  let tokenEndpoint = promptField("token_endpoint (https URL)", secret: false) ?? ""
+  let clientID = promptField("client_id", secret: false) ?? ""
+  let clientSecret = promptField("client_secret (optional, hidden)", secret: true)
+  let refreshToken = promptField("refresh_token (hidden)", secret: true) ?? ""
+  let scopes = promptField("scopes (optional, space-separated)", secret: false)
+  return OAuthRecord(
+    tokenEndpoint: tokenEndpoint,
+    clientID: clientID,
+    clientSecret: emptyToNil(clientSecret),
+    refreshToken: refreshToken,
+    scopes: emptyToNil(scopes)
+  )
+}
+
+// Decode an OAuthRecord from JSON piped on stdin (the non-TTY `oauth set` path), so
+// records can be provisioned non-interactively. A malformed body or a missing
+// required field aborts before anything is stored. Content validity is the caller's
+// record.validate() responsibility.
+func decodeOAuthRecordFromStdin() -> OAuthRecord {
+  let data = FileHandle.standardInput.readDataToEndOfFile()
+  do {
+    return try JSONDecoder().decode(OAuthRecord.self, from: data)
+  } catch {
+    fail("stdin did not contain a valid OAuth record JSON (need token_endpoint, client_id, refresh_token)")
+  }
+}
+
+extension Keymaster {
+  // Manage OAuth refresh-token credential records (the dev.mnck.oauth.* namespace),
+  // the credentials `keymaster get`/`run` mint a fresh access token from. `set`
+  // stores a record, `get` prints the stored record JSON (Touch ID), and `rm`
+  // removes it (Touch ID) — mirroring the plain set/get/rm but on the OAuth store.
+  struct OAuth: ParsableCommand {
+    static let configuration = CommandConfiguration(
+      commandName: "oauth",
+      abstract: "Manage OAuth refresh-token records used to mint access tokens.",
+      subcommands: [Set.self, Get.self, Remove.self]
+    )
+  }
+}
+
+extension Keymaster.OAuth {
+  // Store an OAuth record. On a TTY each field is prompted in turn (client_secret
+  // and refresh_token with echo off); otherwise the record is read as JSON from
+  // stdin. The record is validated, then upserted as canonical JSON via
+  // SecretManager on the .oauth store — a first create does not prompt, an overwrite
+  // prompts via the upsert's authenticated read. If the name already exists as a
+  // plain secret, `storeSecret` refuses (a name lives in exactly one store) and tells
+  // you to `keymaster rm` it first, writing nothing.
+  struct Set: ParsableCommand {
+    static let configuration = CommandConfiguration(
+      abstract: "Store an OAuth record read from prompts (TTY) or JSON on stdin."
+    )
+
+    @Argument(help: "The name to store the OAuth record under.")
+    var name: String
+
+    func run() {
+      let record = isatty(STDIN_FILENO) != 0
+        ? readOAuthRecordInteractively()
+        : decodeOAuthRecordFromStdin()
+      let keychain = SystemKeychain()
+      do {
+        try record.validate()
+        let encoded = try record.encoded()
+        // A name lives in exactly one store, so if this name already holds a plain secret,
+        // refuse rather than overwrite it. `storeSecret` runs a no-prompt `exists` probe of
+        // the plain namespace FIRST and throws `.crossNamespaceConflict` (naming the `rm`
+        // command) without writing anything; otherwise it upserts the OAuth record as today.
+        try storeSecret(encoded, name: name, in: .oauth, conflictingWith: .secret, backend: keychain)
+      } catch let error as KeychainError {
+        fail(error.message)
+      } catch {
+        fail(error.localizedDescription)
+      }
+      print("OAuth record \"\(name)\" has been set in the keychain")
+    }
+  }
+
+  // Print a stored OAuth record's JSON; the Keychain challenges Touch ID on the read.
+  struct Get: ParsableCommand {
+    static let configuration = CommandConfiguration(
+      abstract: "Print a stored OAuth record's JSON, gated by Touch ID."
+    )
+
+    @Argument(help: "The name of the OAuth record to print.")
+    var name: String
+
+    func run() {
+      let manager = SecretManager(backend: SystemKeychain(), namespace: .oauth)
+      do {
+        print(try manager.get(key: name))
+      } catch let error as KeychainError {
+        fail(error.message)
+      } catch {
+        fail(error.localizedDescription)
+      }
+    }
+  }
+
+  // Remove a stored OAuth record; SecretManager.remove forces a Touch ID read before
+  // deleting (read-before-delete), so a cancelled prompt leaves the record intact.
+  struct Remove: ParsableCommand {
+    static let configuration = CommandConfiguration(
+      commandName: "rm",
+      abstract: "Remove a stored OAuth record, gated by Touch ID."
+    )
+
+    @Argument(help: "The name of the OAuth record to remove.")
+    var name: String
+
+    func run() {
+      let manager = SecretManager(backend: SystemKeychain(), namespace: .oauth)
+      do {
+        try manager.remove(key: name)
+      } catch let error as KeychainError {
+        fail(error.message)
+      } catch {
+        fail(error.localizedDescription)
+      }
+      print("OAuth record \"\(name)\" has been removed from the keychain")
     }
   }
 }
