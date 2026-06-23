@@ -222,7 +222,7 @@ nonisolated func makeAccessControl() -> SecAccessControl? {
   return SecAccessControlCreateWithFlags(
     nil,
     kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly,
-    .biometryAny,
+    [.biometryAny, .or, .companion],   // Touch ID OR a paired Apple Watch
     &error
   )
 }
