@@ -58,10 +58,10 @@ nonisolated enum KeychainError: Error, Equatable {
     case .crossNamespaceConflict(let name, let existsIn):
       // `set`/`oauth set` refuse to write a name that already lives in the other
       // namespace (one name, one store). Name the existing item's kind and the exact
-      // `rm` command so the user can remove it first.
+      // `secret rm`/`oauth rm` command so the user can remove it first.
       switch existsIn {
       case .secret:
-        return "\(name) already exists as a plain secret; remove it first with `keymaster rm \(name)`"
+        return "\(name) already exists as a plain secret; remove it first with `keymaster secret rm \(name)`"
       case .oauth:
         return "\(name) already exists as an OAuth record; remove it first with `keymaster oauth rm \(name)`"
       }
@@ -218,7 +218,7 @@ nonisolated struct SecretManager {
 // upsert's own non-atomic add→read→delete→add (see the `.duplicate` note above), it
 // is a check-then-write across two separate Keychain operations: SecItem offers no
 // cross-(service,account) atomic check-and-add, so two CONCURRENT conflicting writers
-// (`keymaster set K` and `keymaster oauth set K` racing on the same name) could each
+// (`keymaster secret set K` and `keymaster oauth set K` racing on the same name) could each
 // probe the other store, both see "absent", and both `add` — leaving `K` in both
 // stores. This is an accepted edge case for a single-user Touch ID CLI: the only
 // possible racer is the user invoking two conflicting commands at once, the worst

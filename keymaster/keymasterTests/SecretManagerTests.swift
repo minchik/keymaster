@@ -349,10 +349,10 @@ struct CrossNamespaceConflictTests {
 
   @Test func conflictMessageNamesKindAndRmCommand() {
     // The centralized message text names the existing item's kind and the exact
-    // `rm`/`oauth rm` command, per namespace.
+    // `secret rm`/`oauth rm` command, per namespace.
     let secretConflict = KeychainError.crossNamespaceConflict(name: "GitHub", existsIn: .secret)
     #expect(secretConflict.message ==
-      "GitHub already exists as a plain secret; remove it first with `keymaster rm GitHub`")
+      "GitHub already exists as a plain secret; remove it first with `keymaster secret rm GitHub`")
     let oauthConflict = KeychainError.crossNamespaceConflict(name: "GitHub", existsIn: .oauth)
     #expect(oauthConflict.message ==
       "GitHub already exists as an OAuth record; remove it first with `keymaster oauth rm GitHub`")
