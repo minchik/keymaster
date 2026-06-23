@@ -11,3 +11,5 @@ build/
 
 # Code-coverage artifact left in the cwd by `xcodebuild test`
 *.profraw
+.bin/
+.envrc
