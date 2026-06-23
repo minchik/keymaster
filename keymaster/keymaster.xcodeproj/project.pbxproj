@@ -41,6 +41,7 @@
 				OAuthRecord.swift,
 				RunSupport.swift,
 				SecretManager.swift,
+				TerminalInput.swift,
 				TokenExchanger.swift,
 			);
 			target = DA7B8B4B2FE580C700AB4D8F /* keymasterTests */;

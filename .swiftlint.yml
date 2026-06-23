@@ -5,6 +5,7 @@ included:
   - keymaster/keymaster/keymasterApp.swift
   - keymaster/keymaster/RunSupport.swift
   - keymaster/keymaster/SecretManager.swift
+  - keymaster/keymaster/TerminalInput.swift
   - keymaster/keymaster/SystemKeychain.swift
   - keymaster/keymaster/OAuthRecord.swift
   - keymaster/keymaster/TokenExchanger.swift

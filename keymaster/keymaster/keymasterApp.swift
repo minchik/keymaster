@@ -53,16 +53,59 @@ func readLineWithEchoOff() -> String? {
   guard tcgetattr(STDIN_FILENO, &original) == 0 else {
     fail("could not read terminal settings")
   }
-  var noEcho = original
-  noEcho.c_lflag &= ~tcflag_t(ECHO)
-  guard tcsetattr(STDIN_FILENO, TCSAFLUSH, &noEcho) == 0 else {
+  var raw = original
+  raw.c_lflag &= ~tcflag_t(ECHO | ICANON)
+  withUnsafeMutableBytes(of: &raw.c_cc) { controls in
+    controls[Int(VMIN)] = 1
+    controls[Int(VTIME)] = 0
+  }
+  guard tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == 0 else {
     fail("could not disable terminal echo")
   }
-  defer {
+  // Restoring the terminal must run on EVERY exit from raw mode, including the fatal
+  // read-error path below — and `fail` calls exit(), which bypasses Swift's `defer`, so
+  // that path calls this directly before failing while every normal exit goes through the
+  // `defer`. (The two `fail`s above run before raw mode is entered, so they need no
+  // restore.) Without it a non-EINTR `read()` error would leave the shell with
+  // echo/canonical mode off.
+  func restoreTerminal() {
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &original)
     FileHandle.standardError.write(Data("\n".utf8))
   }
-  return readLine(strippingNewline: true)
+  defer { restoreTerminal() }
+  var buffer: [UInt8] = []
+  var byte: UInt8 = 0
+  while true {
+    let count = read(STDIN_FILENO, &byte, 1)
+    if count < 0 {
+      // A signal-interrupted read (`EINTR`) is not a real error — retry it, matching
+      // the `readLine()` we replaced. Its `getline` wrapper loops on EINTR
+      // (`do { … } while (result < 0 && errno == EINTR)`), so without this a Ctrl-Z
+      // suspend / `fg` resume (or any signal delivered mid-read) would otherwise abort
+      // a half-typed secret. Only a non-EINTR error is fatal.
+      if errno == EINTR { continue }
+      // A non-EINTR read error is fatal. `fail` exits the process, bypassing the
+      // termios-restoring `defer`, so restore the terminal here first.
+      restoreTerminal()
+      fail("could not read terminal input")
+    }
+    if count == 0 {
+      // Stream EOF: end like Ctrl-D — submit a typed line, else return nil. The
+      // decode is intentionally lossy (matches the old `readLine`, which never
+      // returned nil mid-line on invalid UTF-8), so silence the failable-init rule.
+      // swiftlint:disable:next optional_data_string_conversion
+      return buffer.isEmpty ? nil : String(decoding: buffer, as: UTF8.self)
+    }
+    switch noEchoLineEvent(after: byte, into: &buffer) {
+    case .continue:
+      continue
+    case .endLine:
+      // swiftlint:disable:next optional_data_string_conversion
+      return String(decoding: buffer, as: UTF8.self)
+    case .endInput:
+      return nil
+    }
+  }
 }
 
 // Print a human-readable error and exit non-zero. Kept out of the testable
