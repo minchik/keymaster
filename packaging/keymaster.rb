@@ -7,7 +7,7 @@ cask "keymaster" do
 
   url "https://github.com/minchik/keymaster/releases/download/v#{version}/keymaster-#{version}.zip"
   name "Keymaster"
-  desc "Touch ID-gated macOS Keychain secrets, CLI"
+  desc "Touch ID/Apple Watch-gated macOS Keychain secrets, CLI"
   homepage "https://github.com/minchik/keymaster"
 
   app "Keymaster.app"

@@ -401,9 +401,9 @@ struct OAuthRunResolverTests {
     // A cancelled/failed batch prompt aborts before any classify, read, or mint, so the
     // command never launches with a partially-resolved environment.
     let backend = FakeKeychainBackend(store: [.secret: ["a": Data("1".utf8)]])
-    backend.authenticateError = .status("Touch ID authentication failed or was canceled")
+    backend.authenticateError = .status("Authentication failed or was canceled")
     let manager = OAuthManager(backend: backend, exchanger: FakeTokenExchanger())
-    #expect(throws: KeychainError.status("Touch ID authentication failed or was canceled")) {
+    #expect(throws: KeychainError.status("Authentication failed or was canceled")) {
       _ = try manager.resolveRunEnvironment(
         mappings: [KeyMapping(env: "A", key: "a")],
         reason: "reason"

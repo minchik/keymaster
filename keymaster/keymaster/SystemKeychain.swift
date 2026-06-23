@@ -98,7 +98,7 @@ nonisolated struct SystemKeychain: KeychainBackend {
   // output.
   func authenticate(reason: String) throws -> AuthSession {
     guard let context = authenticatedContext(reason: reason) else {
-      throw KeychainError.status("Touch ID authentication failed or was canceled")
+      throw KeychainError.status("Authentication failed or was canceled")
     }
     return LAAuthSession(context: context)
   }

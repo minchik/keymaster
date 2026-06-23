@@ -1,4 +1,4 @@
-// Keymaster, access Keychain secrets guarded by Touch ID.
+// Keymaster, access Keychain secrets guarded by Touch ID or a paired Apple Watch.
 //
 // This is an .app target only so the binary can carry the
 // `keychain-access-groups` entitlement (a restricted entitlement that AMFI
@@ -139,7 +139,7 @@ func marketingVersion() -> String {
 struct Keymaster: ParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "keymaster",
-    abstract: "Store and retrieve Keychain secrets guarded by Touch ID.",
+    abstract: "Store and retrieve Keychain secrets guarded by Touch ID or Apple Watch.",
     subcommands: [Set.self, Get.self, Remove.self, Run.self, OAuth.self, Version.self]
   )
 }
@@ -190,7 +190,7 @@ extension Keymaster {
   // them verbatim.
   struct Get: ParsableCommand {
     static let configuration = CommandConfiguration(
-      abstract: "Retrieve a secret or mint an OAuth access token, gated by Touch ID."
+      abstract: "Retrieve a secret or mint an OAuth access token, gated by Touch ID or Apple Watch."
     )
 
     @Argument(help: "The key to retrieve.")
@@ -229,7 +229,7 @@ extension Keymaster {
   struct Remove: ParsableCommand {
     static let configuration = CommandConfiguration(
       commandName: "rm",
-      abstract: "Remove a secret, gated by Touch ID."
+      abstract: "Remove a secret, gated by Touch ID or Apple Watch."
     )
 
     @Argument(help: "The key to remove.")
@@ -261,7 +261,7 @@ extension Keymaster {
   // merged over the current environment.
   struct Run: ParsableCommand {
     static let configuration = CommandConfiguration(
-      abstract: "Run a command with keychain secrets injected as env vars (one Touch ID prompt)."
+      abstract: "Run a command with keychain secrets injected as env vars (one Touch ID or Apple Watch prompt)."
     )
 
     @Option(
@@ -441,7 +441,7 @@ extension Keymaster.OAuth {
   // Print a stored OAuth record's JSON; the Keychain challenges Touch ID on the read.
   struct Get: ParsableCommand {
     static let configuration = CommandConfiguration(
-      abstract: "Print a stored OAuth record's JSON, gated by Touch ID."
+      abstract: "Print a stored OAuth record's JSON, gated by Touch ID or Apple Watch."
     )
 
     @Argument(help: "The name of the OAuth record to print.")
@@ -464,7 +464,7 @@ extension Keymaster.OAuth {
   struct Remove: ParsableCommand {
     static let configuration = CommandConfiguration(
       commandName: "rm",
-      abstract: "Remove a stored OAuth record, gated by Touch ID."
+      abstract: "Remove a stored OAuth record, gated by Touch ID or Apple Watch."
     )
 
     @Argument(help: "The name of the OAuth record to remove.")

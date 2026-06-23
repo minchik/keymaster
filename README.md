@@ -72,7 +72,7 @@ If the name already holds an [OAuth record](#oauth-refresh-token-records), `set`
 
 `keymaster get MyKeyName`
 
-A Touch ID prompt appears that **names the requested key** (e.g. `Read keychain secret: "MyKeyName"`), so a script asking for the wrong secret is visible at approval time. On a match, the secret is printed to stdout. Cancelling the prompt denies access, prints nothing, and exits non-zero.
+A Touch ID prompt (which a paired Apple Watch can also approve, via a side-button double-click) appears that **names the requested key** (e.g. `Read keychain secret: "MyKeyName"`), so a script asking for the wrong secret is visible at approval time. On a match, the secret is printed to stdout. Cancelling the prompt denies access, prints nothing, and exits non-zero.
 
 If the name is an [OAuth record](#oauth-refresh-token-records) rather than a plain secret, `get` instead mints a fresh access token from it and prints **only** that token — see below. The namespace is classified through that same single approval — by design, so keymaster never discloses whether a name exists without a Touch ID approval first. A name in neither store therefore fails *after* the one prompt, naming the key and doing nothing else; its absence is never leaked before the prompt.
 
@@ -80,11 +80,11 @@ If the name is an [OAuth record](#oauth-refresh-token-records) rather than a pla
 
 `keymaster rm MyKeyName`
 
-A Touch ID prompt naming the key (`Remove keychain secret: "MyKeyName"`) appears before the item is removed.
+A Touch ID prompt (or Apple Watch approval) naming the key (`Remove keychain secret: "MyKeyName"`) appears before the item is removed.
 
 ## Run a command with secrets
 
-`keymaster run` injects one or more keychain secrets into a child process as environment variables, unlocking the whole batch with a **single** Touch ID prompt. It's modelled on `op run`:
+`keymaster run` injects one or more keychain secrets into a child process as environment variables, unlocking the whole batch with a **single** Touch ID prompt (which a paired Apple Watch can also approve). It's modelled on `op run`:
 
 ```bash
 keymaster run --key API_TOKEN --key DB_PASS=prod-db-password -- ./deploy.sh --flag
@@ -143,9 +143,9 @@ keymaster get GitHub                           # Touch ID → prints ONLY the ac
 keymaster run --key TOKEN=GitHub -- ./deploy   # injects a freshly-minted TOKEN under one prompt
 ```
 
-`keymaster get <name>` unlocks the record with one Touch ID prompt, exchanges the refresh token, and prints **only** the access token to stdout — so `$(keymaster get GitHub)` captures a clean token — while any warning goes to stderr. `keymaster run` treats an OAuth key like a plain one: it is classified through the single prompt and minted into a fresh access token under it. Keymaster never caches a token; it mints a fresh one each time.
+`keymaster get <name>` unlocks the record with one Touch ID prompt (or Apple Watch approval), exchanges the refresh token, and prints **only** the access token to stdout — so `$(keymaster get GitHub)` captures a clean token — while any warning goes to stderr. `keymaster run` treats an OAuth key like a plain one: it is classified through the single prompt and minted into a fresh access token under it. Keymaster never caches a token; it mints a fresh one each time.
 
-Inspect or delete a record (both gated by Touch ID):
+Inspect or delete a record (both gated by Touch ID or Apple Watch):
 
 ```bash
 keymaster oauth get GitHub    # print the stored record as JSON
