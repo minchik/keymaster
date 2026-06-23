@@ -283,6 +283,21 @@ struct KeychainNamespaceTests {
     #expect(backend.calls == [.add("K", namespace: .secret)])
   }
 
+  @Test func secretManagerGetTargetsItsNamespace() throws {
+    // The read path threads `namespace` too: a `.secret` manager's `get` reads ONLY
+    // the `.secret` store, so a name living only in `.oauth` is a plain not-found —
+    // this is the contract the new `secret get` command rests on (a pure plain read
+    // that never resolves an OAuth record). The recorded call shows it probed `.secret`
+    // alone, never `.oauth`.
+    let backend = FakeKeychainBackend(store: [.oauth: ["K": Data("record".utf8)]])
+    #expect(throws: KeychainError.status("item not found")) {
+      _ = try SecretManager(backend: backend, namespace: .secret).get(key: "K")
+    }
+    #expect(backend.calls == [.read("K", verb: "Read", namespace: .secret)])
+    // The OAuth record was never touched.
+    #expect(backend.storedData("K", namespace: .oauth) == Data("record".utf8))
+  }
+
 }
 
 // Tests for the cross-namespace refusal in `storeSecret`, shared by `set` and
