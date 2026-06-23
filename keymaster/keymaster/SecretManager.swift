@@ -30,6 +30,8 @@ nonisolated enum KeychainError: Error, Equatable {
   case invalidData        // stored bytes are not valid UTF-8
   case containsNul        // value has an embedded NUL — refused at the write seam and again on read (decodeEnvValue)
   case status(String)     // an OSStatus mapped to its SecCopyErrorMessageString text
+  // set/oauth set refused: name already lives in the OTHER namespace (one name, one store)
+  case crossNamespaceConflict(name: String, existsIn: KeychainNamespace)
 
   // The user-facing message. `.duplicate` normally stays internal to the `set`
   // upsert, but can still reach the user if a concurrent writer re-creates the key
@@ -53,6 +55,16 @@ nonisolated enum KeychainError: Error, Equatable {
       return "secret contains a NUL byte and cannot be used as an environment variable"
     case .status(let message):
       return message
+    case .crossNamespaceConflict(let name, let existsIn):
+      // `set`/`oauth set` refuse to write a name that already lives in the other
+      // namespace (one name, one store). Name the existing item's kind and the exact
+      // `rm` command so the user can remove it first.
+      switch existsIn {
+      case .secret:
+        return "\(name) already exists as a plain secret; remove it first with `keymaster rm \(name)`"
+      case .oauth:
+        return "\(name) already exists as an OAuth record; remove it first with `keymaster oauth rm \(name)`"
+      }
     }
   }
 }
@@ -216,6 +228,49 @@ nonisolated struct SecretManager {
     }
     return injected
   }
+}
+
+// Store `secret` under `name` in `target`, refusing if `name` already lives in the
+// `other` namespace. A name must live in exactly one store (one name, one store), so
+// a no-prompt `exists` probe of `other` runs FIRST: on a hit nothing is written and
+// `.crossNamespaceConflict` is thrown (its message names the existing item's kind and
+// the `rm` command to remove it). Otherwise this delegates to the namespaced upsert,
+// which is unchanged (first-create no prompt; same-namespace overwrite prompts via
+// read-before-overwrite). Shared by `set` and `oauth set`; the refusal is unit-tested.
+//
+// The probe-then-write is a BEST-EFFORT refusal, not an atomic guarantee. Like the
+// upsert's own non-atomic add→read→delete→add (see the `.duplicate` note above), it
+// is a check-then-write across two separate Keychain operations: SecItem offers no
+// cross-(service,account) atomic check-and-add, so two CONCURRENT conflicting writers
+// (`keymaster set K` and `keymaster oauth set K` racing on the same name) could each
+// probe the other store, both see "absent", and both `add` — leaving `K` in both
+// stores. This is an accepted edge case for a single-user Touch ID CLI: the only
+// possible racer is the user invoking two conflicting commands at once, the worst
+// case is benign (a name briefly resolvable in both stores; `get`/`run` still resolve
+// deterministically — `.oauth` wins the tie — and either `rm` clears it), and a
+// post-write rollback would not close the window (it only moves it) while risking
+// mutual deletion when both racers roll back. So the guard stays a refusal, not a
+// concurrency control.
+nonisolated func storeSecret(
+  _ secret: Data,
+  name: String,
+  in target: KeychainNamespace,
+  conflictingWith other: KeychainNamespace,
+  backend: KeychainBackend
+) throws {
+  // Refuse to store a value with an embedded NUL — it could never be injected as an
+  // environment variable later: `get`/`run` decode through `decodeEnvValue` (which
+  // rejects NUL) and `Process.run()` aborts on one, so a stored NUL value would be
+  // permanently unretrievable. Reject it here, at the shared write seam, rather than
+  // accept a write that can never be read back. The guard runs FIRST — before the
+  // cross-namespace probe — so a bad value triggers no keychain I/O at all, and it
+  // protects BOTH namespaces uniformly (in practice only plain `set` can receive a raw
+  // NUL; `oauth set` passes canonical JSON, which never contains a `0x00` byte).
+  guard !secret.contains(0) else { throw KeychainError.containsNul }
+  if try backend.exists(key: name, namespace: other) {
+    throw KeychainError.crossNamespaceConflict(name: name, existsIn: other)
+  }
+  try SecretManager(backend: backend, namespace: target).set(key: name, secret: secret)
 }
 
 // Decode stored bytes into the secret string. Non-UTF-8 is rejected because

@@ -402,3 +402,125 @@ struct KeychainNamespaceTests {
   }
 
 }
+
+// Tests for the cross-namespace refusal in `storeSecret`, shared by `set` and
+// `oauth set`. A name must live in exactly one store (one name, one store): before
+// writing, `storeSecret` runs a no-prompt `exists` probe of the OTHER namespace and,
+// on a hit, throws `.crossNamespaceConflict` writing NOTHING; otherwise it delegates
+// to the namespaced upsert unchanged. Exercised against FakeKeychainBackend (records
+// the ordered call log — including the leading `.exists` probe — and programmable
+// per-key errors).
+struct CrossNamespaceConflictTests {
+
+  @Test func noConflictProbesThenCreatesInTarget() throws {
+    // Empty backend: the probe of the other namespace finds nothing, so the create
+    // proceeds. The recorded log leads with the `.exists` probe, then the create.
+    let backend = FakeKeychainBackend()
+    try storeSecret(Data("v".utf8), name: "K", in: .secret, conflictingWith: .oauth, backend: backend)
+    #expect(backend.calls == [.exists("K", namespace: .oauth), .add("K", namespace: .secret)])
+    #expect(backend.storedData("K", namespace: .secret) == Data("v".utf8))
+  }
+
+  @Test func oauthSetOverPlainRefusesWritingNothing() {
+    // `oauth set` over an existing plain secret: the probe of `.secret` hits, so it
+    // throws `.crossNamespaceConflict(existsIn: .secret)` after the probe alone — no
+    // add/read/delete — and both stores are left untouched.
+    let backend = FakeKeychainBackend(store: [.secret: ["K": Data("plain".utf8)]])
+    #expect(throws: KeychainError.crossNamespaceConflict(name: "K", existsIn: .secret)) {
+      try storeSecret(Data("record".utf8), name: "K", in: .oauth, conflictingWith: .secret, backend: backend)
+    }
+    // Probe only — assert the exact sequence (the probe IS logged, so not empty).
+    #expect(backend.calls == [.exists("K", namespace: .secret)])
+    #expect(backend.storedData("K", namespace: .secret) == Data("plain".utf8))
+    #expect(backend.storedData("K", namespace: .oauth) == nil)
+  }
+
+  @Test func plainSetOverOauthRefusesWritingNothing() {
+    // The symmetric direction: plain `set` over an existing OAuth record probes
+    // `.oauth`, hits, and throws `.crossNamespaceConflict(existsIn: .oauth)` with no
+    // write calls; both stores untouched.
+    let backend = FakeKeychainBackend(store: [.oauth: ["K": Data("record".utf8)]])
+    #expect(throws: KeychainError.crossNamespaceConflict(name: "K", existsIn: .oauth)) {
+      try storeSecret(Data("plain".utf8), name: "K", in: .secret, conflictingWith: .oauth, backend: backend)
+    }
+    #expect(backend.calls == [.exists("K", namespace: .oauth)])
+    #expect(backend.storedData("K", namespace: .oauth) == Data("record".utf8))
+    #expect(backend.storedData("K", namespace: .secret) == nil)
+  }
+
+  @Test func sameNamespaceOverwritePassesThroughToUpsert() throws {
+    // No cross-namespace conflict (the name lives in the SAME store being written):
+    // the probe of the other namespace misses, then the wrapper delegates to `set()`'s
+    // full upsert (add → authenticated read → delete → re-add). This keeps the
+    // delegation covered now that the old move tests are gone.
+    let backend = FakeKeychainBackend(store: [.secret: ["K": Data("old".utf8)]])
+    try storeSecret(Data("new".utf8), name: "K", in: .secret, conflictingWith: .oauth, backend: backend)
+    #expect(backend.calls == [
+      .exists("K", namespace: .oauth),
+      .add("K", namespace: .secret),
+      .read("K", verb: "Update", namespace: .secret),
+      .delete("K", namespace: .secret),
+      .add("K", namespace: .secret)
+    ])
+    #expect(backend.storedData("K", namespace: .secret) == Data("new".utf8))
+  }
+
+  @Test func conflictMessageNamesKindAndRmCommand() {
+    // The centralized message text names the existing item's kind and the exact
+    // `rm`/`oauth rm` command, per namespace.
+    let secretConflict = KeychainError.crossNamespaceConflict(name: "GitHub", existsIn: .secret)
+    #expect(secretConflict.message ==
+      "GitHub already exists as a plain secret; remove it first with `keymaster rm GitHub`")
+    let oauthConflict = KeychainError.crossNamespaceConflict(name: "GitHub", existsIn: .oauth)
+    #expect(oauthConflict.message ==
+      "GitHub already exists as an OAuth record; remove it first with `keymaster oauth rm GitHub`")
+  }
+
+  @Test func nulValueRefusedBeforeAnyBackendCall() {
+    // A value carrying an embedded NUL is refused at the write seam BEFORE the
+    // cross-namespace probe — `get`/`run` decode through `decodeEnvValue` (which rejects
+    // NUL) and `Process.run()` aborts on one, so storing it would be permanently
+    // unretrievable. The guard precedes the probe, so the backend records NO calls and
+    // nothing is written in either namespace.
+    let backend = FakeKeychainBackend()
+    #expect(throws: KeychainError.containsNul) {
+      try storeSecret(Data("a\0b".utf8), name: "K", in: .secret, conflictingWith: .oauth, backend: backend)
+    }
+    #expect(backend.calls.isEmpty)
+    #expect(backend.storedData("K", namespace: .secret) == nil)
+    #expect(backend.storedData("K", namespace: .oauth) == nil)
+  }
+
+  @Test func nulValueRefusedInOauthDirectionToo() {
+    // The NUL guard lives at the SHARED `storeSecret` seam, so it refuses a NUL-bearing
+    // value written into `.oauth` (conflicting with `.secret`) exactly as it does the
+    // `.secret` direction — proving the "protects BOTH namespaces uniformly" claim, not
+    // just one. Like the `.secret` case it precedes the probe, so no backend calls and
+    // nothing is written in either store.
+    let backend = FakeKeychainBackend()
+    #expect(throws: KeychainError.containsNul) {
+      try storeSecret(Data("a\0b".utf8), name: "K", in: .oauth, conflictingWith: .secret, backend: backend)
+    }
+    #expect(backend.calls.isEmpty)
+    #expect(backend.storedData("K", namespace: .secret) == nil)
+    #expect(backend.storedData("K", namespace: .oauth) == nil)
+  }
+
+  @Test func probeErrorPropagatesAndWritesNothing() {
+    // Fail-closed guard: if the other-namespace `exists` probe cannot determine
+    // presence (a transient error), `storeSecret` must PROPAGATE that error and write
+    // NOTHING — never fall through to the create. Reading "absent" on a transient
+    // error would let the same name be written into both stores, breaking "one name,
+    // one store". The recorded log is the probe alone — no `.add`.
+    let backend = FakeKeychainBackend()
+    // The guard probes the OTHER namespace (`.oauth`) before writing into `.secret`.
+    backend.existsErrors["K"] = [.oauth: .status("keychain locked")]
+    #expect(throws: KeychainError.status("keychain locked")) {
+      try storeSecret(Data("v".utf8), name: "K", in: .secret, conflictingWith: .oauth, backend: backend)
+    }
+    #expect(backend.calls == [.exists("K", namespace: .oauth)])
+    #expect(backend.storedData("K", namespace: .secret) == nil)
+    #expect(backend.storedData("K", namespace: .oauth) == nil)
+  }
+
+}
