@@ -293,9 +293,10 @@ struct KeychainNamespaceTests {
     #expect(throws: KeychainError.status("item not found")) {
       _ = try SecretManager(backend: backend, namespace: .secret).get(key: "K")
     }
+    // The recorded calls are the load-bearing assertion: exactly one `.secret` read and
+    // no `.oauth` probe. A cross-resolving `get` (e.g. an `.oauth` fallback on a `.secret`
+    // miss) would add a `.read(... namespace: .oauth)` call here and fail this check.
     #expect(backend.calls == [.read("K", verb: "Read", namespace: .secret)])
-    // The OAuth record was never touched.
-    #expect(backend.storedData("K", namespace: .oauth) == Data("record".utf8))
   }
 
 }

@@ -56,7 +56,7 @@ nonisolated enum KeychainError: Error, Equatable {
     case .status(let message):
       return message
     case .crossNamespaceConflict(let name, let existsIn):
-      // `set`/`oauth set` refuse to write a name that already lives in the other
+      // `secret set`/`oauth set` refuse to write a name that already lives in the other
       // namespace (one name, one store). Name the existing item's kind and the exact
       // `secret rm`/`oauth rm` command so the user can remove it first.
       switch existsIn {
@@ -212,7 +212,7 @@ nonisolated struct SecretManager {
 // `.crossNamespaceConflict` is thrown (its message names the existing item's kind and
 // the `rm` command to remove it). Otherwise this delegates to the namespaced upsert,
 // which is unchanged (first-create no prompt; same-namespace overwrite prompts via
-// read-before-overwrite). Shared by `set` and `oauth set`; the refusal is unit-tested.
+// read-before-overwrite). Shared by `secret set` and `oauth set`; the refusal is unit-tested.
 //
 // The probe-then-write is a BEST-EFFORT refusal, not an atomic guarantee. Like the
 // upsert's own non-atomic add→read→delete→add (see the `.duplicate` note above), it
@@ -240,8 +240,8 @@ nonisolated func storeSecret(
   // permanently unretrievable. Reject it here, at the shared write seam, rather than
   // accept a write that can never be read back. The guard runs FIRST — before the
   // cross-namespace probe — so a bad value triggers no keychain I/O at all, and it
-  // protects BOTH namespaces uniformly (in practice only plain `set` can receive a raw
-  // NUL; `oauth set` passes canonical JSON, which never contains a `0x00` byte).
+  // protects BOTH namespaces uniformly (in practice only plain `secret set` can receive a
+  // raw NUL; `oauth set` passes canonical JSON, which never contains a `0x00` byte).
   guard !secret.contains(0) else { throw KeychainError.containsNul }
   if try backend.exists(key: name, namespace: other) {
     throw KeychainError.crossNamespaceConflict(name: name, existsIn: other)
@@ -269,7 +269,7 @@ nonisolated func decodeSecret(_ data: Data) throws -> String {
 // `storeSecret` now refuses to WRITE a NUL value in the first place, so this
 // read-time check is defense-in-depth for legacy or out-of-band bytes (an item
 // written by an older keymaster before the write guard, or by another tool in the
-// access group) — a NUL can never originate from a current `set`/`oauth set`.
+// access group) — a NUL can never originate from a current `secret set`/`oauth set`.
 nonisolated func decodeEnvValue(_ data: Data) throws -> String {
   let secret = try decodeSecret(data)
   guard !secret.contains("\0") else {
