@@ -3,8 +3,10 @@
 // This is an .app target only so the binary can carry the
 // `keychain-access-groups` entitlement (a restricted entitlement that AMFI
 // rejects on an unsigned/unprovisioned binary). At runtime it behaves as a
-// CLI: `Keymaster.app/Contents/MacOS/keymaster <set|get|rm> <key>` does
-// its Keychain work and exits before any AppKit run loop starts, so no window
+// CLI: `Keymaster.app/Contents/MacOS/keymaster <command> <key>` (e.g.
+// `secret set`/`secret get`/`secret rm` for plain secrets, the namespace-
+// independent `get`/`run`, or the `oauth set`/`get`/`rm` group) does its
+// Keychain work and exits before any AppKit run loop starts, so no window
 // is shown.
 //
 // This file is now just the CLI surface: argument parsing plus stdin/version/IO
@@ -140,43 +142,11 @@ struct Keymaster: ParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "keymaster",
     abstract: "Store and retrieve Keychain secrets guarded by Touch ID or Apple Watch.",
-    subcommands: [Set.self, Get.self, Remove.self, Run.self, OAuth.self, Version.self]
+    subcommands: [Get.self, Run.self, Secret.self, OAuth.self, Version.self]
   )
 }
 
 extension Keymaster {
-  // Store a secret read from stdin. No Touch ID prompt on first create (the ACL
-  // is evaluated on access, not creation); an overwrite prompts via the upsert's
-  // authenticated read inside SecretManager.set.
-  struct Set: ParsableCommand {
-    static let configuration = CommandConfiguration(
-      abstract: "Store a secret read from stdin; prompts on overwrite."
-    )
-
-    @Argument(help: "The key to store the secret under.")
-    var key: String
-
-    func run() {
-      guard let secret = readSecret(for: key), !secret.isEmpty else {
-        fail("no secret provided")
-      }
-      let keychain = SystemKeychain()
-      do {
-        // Symmetric cross-namespace guard: a name lives in exactly one store, so if this
-        // name already holds an OAuth record, refuse rather than overwrite it. `storeSecret`
-        // runs a no-prompt `exists` probe of the OAuth namespace FIRST and throws
-        // `.crossNamespaceConflict` (naming the `oauth rm` command) without writing anything;
-        // otherwise it upserts the plain secret as today.
-        try storeSecret(Data(secret.utf8), name: key, in: .secret, conflictingWith: .oauth, backend: keychain)
-      } catch let error as KeychainError {
-        fail(error.message)
-      } catch {
-        fail(error.localizedDescription)
-      }
-      print("Key \"\(key)\" has been set in the keychain")
-    }
-  }
-
   // Retrieve a secret, OR mint a fresh access token for an OAuth record, under a
   // SINGLE Touch ID prompt. The resolver authenticates ONCE, then classifies the
   // name's namespace THROUGH that session (no separate probe prompt): a plain secret
@@ -222,29 +192,6 @@ extension Keymaster {
 
     func run() {
       print("keymaster \(marketingVersion())")
-    }
-  }
-
-  // Remove a secret; SecretManager.remove forces a Touch ID read before deleting.
-  struct Remove: ParsableCommand {
-    static let configuration = CommandConfiguration(
-      commandName: "rm",
-      abstract: "Remove a secret, gated by Touch ID or Apple Watch."
-    )
-
-    @Argument(help: "The key to remove.")
-    var key: String
-
-    func run() {
-      let manager = SecretManager(backend: SystemKeychain())
-      do {
-        try manager.remove(key: key)
-      } catch let error as KeychainError {
-        fail(error.message)
-      } catch {
-        fail(error.localizedDescription)
-      }
-      print("Key \"\(key)\" has been removed from the keychain")
     }
   }
 
@@ -387,10 +334,109 @@ func decodeOAuthRecordFromStdin() -> OAuthRecord {
 }
 
 extension Keymaster {
+  // Manage plain (non-OAuth) Keychain secrets (the dev.mnck.* namespace). `set`
+  // stores a secret read from stdin, `get` prints the stored value (Touch ID), and
+  // `rm` removes it (Touch ID) — all scoped to the plain store only. This is the
+  // namespace-DEPENDENT CRUD group; the namespace-independent resolver is the
+  // top-level `keymaster get` (which also mints OAuth tokens). `secret get` is the
+  // plain-only analogue of `oauth get`: a pure read that never mints and never
+  // consults the OAuth namespace, so an OAuth name yields a plain "not found".
+  struct Secret: ParsableCommand {
+    static let configuration = CommandConfiguration(
+      commandName: "secret",
+      abstract: "Manage plain Keychain secrets.",
+      subcommands: [Set.self, Get.self, Remove.self]
+    )
+  }
+}
+
+extension Keymaster.Secret {
+  // Store a secret read from stdin. No Touch ID prompt on first create (the ACL
+  // is evaluated on access, not creation); an overwrite prompts via the upsert's
+  // authenticated read inside SecretManager.set.
+  struct Set: ParsableCommand {
+    static let configuration = CommandConfiguration(
+      abstract: "Store a secret read from stdin; prompts on overwrite."
+    )
+
+    @Argument(help: "The key to store the secret under.")
+    var key: String
+
+    func run() {
+      guard let secret = readSecret(for: key), !secret.isEmpty else {
+        fail("no secret provided")
+      }
+      let keychain = SystemKeychain()
+      do {
+        // Symmetric cross-namespace guard: a name lives in exactly one store, so if this
+        // name already holds an OAuth record, refuse rather than overwrite it. `storeSecret`
+        // runs a no-prompt `exists` probe of the OAuth namespace FIRST and throws
+        // `.crossNamespaceConflict` (naming the `oauth rm` command) without writing anything;
+        // otherwise it upserts the plain secret as today.
+        try storeSecret(Data(secret.utf8), name: key, in: .secret, conflictingWith: .oauth, backend: keychain)
+      } catch let error as KeychainError {
+        fail(error.message)
+      } catch {
+        fail(error.localizedDescription)
+      }
+      print("Key \"\(key)\" has been set in the keychain")
+    }
+  }
+
+  // Print a stored plain secret's value; the Keychain challenges Touch ID on the read.
+  // A pure, namespace-DEPENDENT read of the plain store only: it never mints and never
+  // consults the OAuth namespace, so a name that is actually an OAuth record yields a
+  // plain-namespace "not found" (the intended, scoped behaviour, mirroring `oauth get`).
+  struct Get: ParsableCommand {
+    static let configuration = CommandConfiguration(
+      abstract: "Retrieve a plain secret, gated by Touch ID or Apple Watch."
+    )
+
+    @Argument(help: "The key to retrieve.")
+    var key: String
+
+    func run() {
+      let manager = SecretManager(backend: SystemKeychain(), namespace: .secret)
+      do {
+        print(try manager.get(key: key))
+      } catch let error as KeychainError {
+        fail(error.message)
+      } catch {
+        fail(error.localizedDescription)
+      }
+    }
+  }
+
+  // Remove a secret; SecretManager.remove forces a Touch ID read before deleting.
+  struct Remove: ParsableCommand {
+    static let configuration = CommandConfiguration(
+      commandName: "rm",
+      abstract: "Remove a secret, gated by Touch ID or Apple Watch."
+    )
+
+    @Argument(help: "The key to remove.")
+    var key: String
+
+    func run() {
+      let manager = SecretManager(backend: SystemKeychain())
+      do {
+        try manager.remove(key: key)
+      } catch let error as KeychainError {
+        fail(error.message)
+      } catch {
+        fail(error.localizedDescription)
+      }
+      print("Key \"\(key)\" has been removed from the keychain")
+    }
+  }
+}
+
+extension Keymaster {
   // Manage OAuth refresh-token credential records (the dev.mnck.oauth.* namespace),
   // the credentials `keymaster get`/`run` mint a fresh access token from. `set`
   // stores a record, `get` prints the stored record JSON (Touch ID), and `rm`
-  // removes it (Touch ID) — mirroring the plain set/get/rm but on the OAuth store.
+  // removes it (Touch ID) — mirroring the plain `secret set`/`get`/`rm` but on the
+  // OAuth store.
   struct OAuth: ParsableCommand {
     static let configuration = CommandConfiguration(
       commandName: "oauth",
@@ -407,7 +453,7 @@ extension Keymaster.OAuth {
   // SecretManager on the .oauth store — a first create does not prompt, an overwrite
   // prompts via the upsert's authenticated read. If the name already exists as a
   // plain secret, `storeSecret` refuses (a name lives in exactly one store) and tells
-  // you to `keymaster rm` it first, writing nothing.
+  // you to `keymaster secret rm` it first, writing nothing.
   struct Set: ParsableCommand {
     static let configuration = CommandConfiguration(
       abstract: "Store an OAuth record read from prompts (TTY) or JSON on stdin."
@@ -426,8 +472,8 @@ extension Keymaster.OAuth {
         let encoded = try record.encoded()
         // A name lives in exactly one store, so if this name already holds a plain secret,
         // refuse rather than overwrite it. `storeSecret` runs a no-prompt `exists` probe of
-        // the plain namespace FIRST and throws `.crossNamespaceConflict` (naming the `rm`
-        // command) without writing anything; otherwise it upserts the OAuth record as today.
+        // the plain namespace FIRST and throws `.crossNamespaceConflict` (naming the
+        // `secret rm` command) without writing anything; otherwise it upserts the OAuth record as today.
         try storeSecret(encoded, name: name, in: .oauth, conflictingWith: .secret, backend: keychain)
       } catch let error as KeychainError {
         fail(error.message)
