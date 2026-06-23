@@ -62,15 +62,19 @@ keymaster set MyKeyName
 printf %s "$SECRET" | keymaster set MyKeyName
 ```
 
-Piped input is read in full, so multi-line secrets (e.g. PEM keys) are preserved; a single trailing newline is trimmed. The interactive prompt reads one typed line. Secrets must be text (valid UTF-8), and an empty secret is rejected.
+Piped input is read in full, so multi-line secrets (e.g. PEM keys) are preserved; a single trailing newline is trimmed. The interactive prompt reads one typed line. Secrets must be text (valid UTF-8) with no embedded NUL byte (one could never be injected as an environment variable, so it is refused at write time rather than stored unretrievably), and an empty secret is rejected.
 
 Creating a brand-new key does **not** prompt for Touch ID (the biometric access control is evaluated on access, not on creation). Overwriting an existing key **does** prompt and names the key.
+
+If the name already holds an [OAuth record](#oauth-refresh-token-records), `set` **refuses** and writes nothing — a name lives in exactly one store (see [OAuth refresh-token records](#oauth-refresh-token-records) below). Remove the OAuth record first with `keymaster oauth rm MyKeyName`, then re-run `set`.
 
 ## Retrieve a secret
 
 `keymaster get MyKeyName`
 
 A Touch ID prompt appears that **names the requested key** (e.g. `Read keychain secret: "MyKeyName"`), so a script asking for the wrong secret is visible at approval time. On a match, the secret is printed to stdout. Cancelling the prompt denies access, prints nothing, and exits non-zero.
+
+If the name is an [OAuth record](#oauth-refresh-token-records) rather than a plain secret, `get` instead mints a fresh access token from it and prints **only** that token — see below. The namespace is classified through that same single approval — by design, so keymaster never discloses whether a name exists without a Touch ID approval first. A name in neither store therefore fails *after* the one prompt, naming the key and doing nothing else; its absence is never leaked before the prompt.
 
 ## Remove a secret
 
@@ -90,6 +94,8 @@ Everything after `--` is the command to run. Each `--key` is repeatable and name
 
 - `--key NAME` — read keychain key `NAME` and inject it as environment variable `NAME`.
 - `--key ENVNAME=keychainkey` — read keychain key `keychainkey` and inject it as environment variable `ENVNAME`. The split is on the **first** `=` only, so keychain keys may themselves contain `=`.
+
+A key may name either a plain secret or an [OAuth record](#oauth-refresh-token-records). Every name is classified (plain vs OAuth) *through* the single Touch ID approval itself — the probe rides that one prompt. This is the intended security guarantee, not just a prompt-saving trick: keymaster never discloses whether a name exists without a biometric approval first, so a name in neither store aborts the batch *after* the prompt, naming the key, rather than leaking its absence beforehand; an OAuth key is minted into a fresh access token under that same one prompt.
 
 The injected variables are merged over the current environment (a `--key` that names an existing env var overrides it; a duplicated env name keeps the last one). The command is launched through `/usr/bin/env`, so a bare program name like `node` is resolved against `PATH`, and stdio is inherited so the child talks to your terminal directly.
 
@@ -111,10 +117,52 @@ keymaster run \
   -- task sync
 ```
 
+## OAuth refresh-token records
+
+Some APIs don't take a static secret — they hand out a long-lived **refresh token** that you exchange for a short-lived **access token** whenever you need one. Keymaster can store the refresh-token credential behind Touch ID and do that exchange for you on demand (the RFC 6749 §6 refresh-token grant), so scripts never hold an expiring access token and you never copy one by hand.
+
+Store a record under a name:
+
+```bash
+# Interactive: keymaster prompts for each field (client_secret and refresh_token are read without echo)
+keymaster oauth set GitHub
+
+# Non-interactive: pipe the whole record as JSON
+printf '%s' '{"token_endpoint":"https://example.com/token","client_id":"abc","refresh_token":"r0","scopes":"repo"}' \
+  | keymaster oauth set GitHub
+```
+
+A record has three required fields — `token_endpoint` (must be `https`), `client_id`, and `refresh_token` — plus optional `client_secret` (omit it for a public client) and `scopes`. Creating a record does **not** prompt for Touch ID; overwriting one does.
+
+If the name already holds a plain secret, `oauth set` **refuses** and writes nothing — a name lives in exactly one store (see **One name, one store** below). Remove the plain secret first with `keymaster rm GitHub`, then re-run `oauth set`.
+
+Mint an access token from a stored record:
+
+```bash
+keymaster get GitHub                           # Touch ID → prints ONLY the access token to stdout
+keymaster run --key TOKEN=GitHub -- ./deploy   # injects a freshly-minted TOKEN under one prompt
+```
+
+`keymaster get <name>` unlocks the record with one Touch ID prompt, exchanges the refresh token, and prints **only** the access token to stdout — so `$(keymaster get GitHub)` captures a clean token — while any warning goes to stderr. `keymaster run` treats an OAuth key like a plain one: it is classified through the single prompt and minted into a fresh access token under it. Keymaster never caches a token; it mints a fresh one each time.
+
+Inspect or delete a record (both gated by Touch ID):
+
+```bash
+keymaster oauth get GitHub    # print the stored record as JSON
+keymaster oauth rm GitHub     # remove the record
+```
+
+**No redirects.** The token exchange never follows HTTP redirects — to avoid resending the refresh token (and any `client_secret`) to another host, a token endpoint that responds with a 3xx **fails** the request rather than minting.
+
+**Rotation.** If the provider returns a new `refresh_token` (token rotation), keymaster updates the stored record in place, atomically, with no extra prompt, preserving any extra keys the stored JSON happened to carry (the write-back edits the `refresh_token` field in the stored object rather than rewriting it from scratch). If that write-back ever fails, the access token it just minted is still used and a warning is printed to **stderr** telling you to re-run `keymaster oauth set` — it does not abort. An expired or revoked refresh token surfaces a clear `invalid_grant` → "re-run oauth set" message.
+
+**One name, one store.** A name is either a plain secret or an OAuth record, never both. If you `set` a plain secret over an existing OAuth record (or `oauth set` over an existing plain secret), keymaster **refuses** and writes nothing — the existing item is left untouched. A no-prompt `exists` probe of the other namespace runs before any write, so the refusal costs no Touch ID prompt and names the exact `rm` command to remove the old item. The probe is fail-closed: if the keychain can't determine presence (a transient error), the write refuses rather than silently skipping the cross-namespace check. To replace the credential, remove the old item first (`keymaster oauth rm <name>` or `keymaster rm <name>`), then create the new one.
+
 ## Storage details
 
 - **Keychain:** the modern data-protection keychain (`kSecUseDataProtectionKeychain`).
 - **Item:** service `dev.mnck.<key>`, account `keymaster`, access group `<TeamID>.dev.mnck.keymaster`.
+- **OAuth records:** the same keychain, access group, accessibility, and access control, but under a separate service prefix `dev.mnck.oauth.<name>` **and** a distinct account `keymaster.oauth`, holding the whole credential as JSON (written canonically at `oauth set` time; a rotation write-back stays decode-equivalent but not byte-canonical). (The distinct account keeps the prefix-overlapping namespaces from ever aliasing — a plain key `oauth.<name>` would otherwise share the OAuth record `<name>`'s service string.)
 - **Accessibility:** `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly` — items never sync to iCloud and never appear in backups, and they are **destroyed if you remove your device passcode**.
 - **`.biometryAny`:** any currently-enrolled fingerprint/face can satisfy the prompt, and the item is *not* invalidated if you later add or remove an enrolled biometric.
 
