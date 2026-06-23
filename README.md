@@ -56,17 +56,17 @@ The secret is read from **stdin**, never passed as an argument (an argument woul
 
 ```bash
 # Interactive: keymaster prompts and reads the secret without echoing it to the screen
-keymaster set MyKeyName
+keymaster secret set MyKeyName
 
 # Piped: feed the secret in from another command
-printf %s "$SECRET" | keymaster set MyKeyName
+printf %s "$SECRET" | keymaster secret set MyKeyName
 ```
 
 Piped input is read in full, so multi-line secrets (e.g. PEM keys) are preserved; a single trailing newline is trimmed. The interactive prompt reads one typed line. Secrets must be text (valid UTF-8) with no embedded NUL byte (one could never be injected as an environment variable, so it is refused at write time rather than stored unretrievably), and an empty secret is rejected.
 
 Creating a brand-new key does **not** prompt for Touch ID (the biometric access control is evaluated on access, not on creation). Overwriting an existing key **does** prompt and names the key.
 
-If the name already holds an [OAuth record](#oauth-refresh-token-records), `set` **refuses** and writes nothing — a name lives in exactly one store (see [OAuth refresh-token records](#oauth-refresh-token-records) below). Remove the OAuth record first with `keymaster oauth rm MyKeyName`, then re-run `set`.
+If the name already holds an [OAuth record](#oauth-refresh-token-records), `secret set` **refuses** and writes nothing — a name lives in exactly one store (see [OAuth refresh-token records](#oauth-refresh-token-records) below). Remove the OAuth record first with `keymaster oauth rm MyKeyName`, then re-run `keymaster secret set`.
 
 ## Retrieve a secret
 
@@ -74,11 +74,13 @@ If the name already holds an [OAuth record](#oauth-refresh-token-records), `set`
 
 A Touch ID prompt (which a paired Apple Watch can also approve, via a side-button double-click) appears that **names the requested key** (e.g. `Read keychain secret: "MyKeyName"`), so a script asking for the wrong secret is visible at approval time. On a match, the secret is printed to stdout. Cancelling the prompt denies access, prints nothing, and exits non-zero.
 
-If the name is an [OAuth record](#oauth-refresh-token-records) rather than a plain secret, `get` instead mints a fresh access token from it and prints **only** that token — see below. The namespace is classified through that same single approval — by design, so keymaster never discloses whether a name exists without a Touch ID approval first. A name in neither store therefore fails *after* the one prompt, naming the key and doing nothing else; its absence is never leaked before the prompt.
+Top-level `get` is the one **namespace-independent** retrieval command: if the name is an [OAuth record](#oauth-refresh-token-records) rather than a plain secret, `get` instead mints a fresh access token from it and prints **only** that token — see below. The namespace is classified through that same single approval — by design, so keymaster never discloses whether a name exists without a Touch ID approval first. A name in neither store therefore fails *after* the one prompt, naming the key and doing nothing else; its absence is never leaked before the prompt.
+
+For a strictly plain-only read, use `keymaster secret get MyKeyName` — the plain-namespace analogue of `keymaster oauth get` (below). It never mints and never consults the OAuth namespace, so a name that is actually an OAuth record returns a plain-namespace "not found".
 
 ## Remove a secret
 
-`keymaster rm MyKeyName`
+`keymaster secret rm MyKeyName`
 
 A Touch ID prompt (or Apple Watch approval) naming the key (`Remove keychain secret: "MyKeyName"`) appears before the item is removed.
 
@@ -134,7 +136,7 @@ printf '%s' '{"token_endpoint":"https://example.com/token","client_id":"abc","re
 
 A record has three required fields — `token_endpoint` (must be `https`), `client_id`, and `refresh_token` — plus optional `client_secret` (omit it for a public client) and `scopes`. Creating a record does **not** prompt for Touch ID; overwriting one does.
 
-If the name already holds a plain secret, `oauth set` **refuses** and writes nothing — a name lives in exactly one store (see **One name, one store** below). Remove the plain secret first with `keymaster rm GitHub`, then re-run `oauth set`.
+If the name already holds a plain secret, `oauth set` **refuses** and writes nothing — a name lives in exactly one store (see **One name, one store** below). Remove the plain secret first with `keymaster secret rm GitHub`, then re-run `oauth set`.
 
 Mint an access token from a stored record:
 
@@ -156,7 +158,7 @@ keymaster oauth rm GitHub     # remove the record
 
 **Rotation.** If the provider returns a new `refresh_token` (token rotation), keymaster updates the stored record in place, atomically, with no extra prompt, preserving any extra keys the stored JSON happened to carry (the write-back edits the `refresh_token` field in the stored object rather than rewriting it from scratch). If that write-back ever fails, the access token it just minted is still used and a warning is printed to **stderr** telling you to re-run `keymaster oauth set` — it does not abort. An expired or revoked refresh token surfaces a clear `invalid_grant` → "re-run oauth set" message.
 
-**One name, one store.** A name is either a plain secret or an OAuth record, never both. If you `set` a plain secret over an existing OAuth record (or `oauth set` over an existing plain secret), keymaster **refuses** and writes nothing — the existing item is left untouched. A no-prompt `exists` probe of the other namespace runs before any write, so the refusal costs no Touch ID prompt and names the exact `rm` command to remove the old item. The probe is fail-closed: if the keychain can't determine presence (a transient error), the write refuses rather than silently skipping the cross-namespace check. To replace the credential, remove the old item first (`keymaster oauth rm <name>` or `keymaster rm <name>`), then create the new one.
+**One name, one store.** A name is either a plain secret or an OAuth record, never both. If you `secret set` a plain secret over an existing OAuth record (or `oauth set` over an existing plain secret), keymaster **refuses** and writes nothing — the existing item is left untouched. A no-prompt `exists` probe of the other namespace runs before any write, so the refusal costs no Touch ID prompt and names the exact `rm` command to remove the old item. The probe is fail-closed: if the keychain can't determine presence (a transient error), the write refuses rather than silently skipping the cross-namespace check. To replace the credential, remove the old item first (`keymaster oauth rm <name>` or `keymaster secret rm <name>`), then create the new one.
 
 ## Storage details
 
@@ -168,7 +170,7 @@ keymaster oauth rm GitHub     # remove the record
 
 ## Migration from the previous version (breaking change)
 
-The previous keymaster stored items in the **legacy** keychain with **no biometric protection**. This version uses the data-protection keychain, so old secrets are not found and must be re-`set` with the new build.
+The previous keymaster stored items in the **legacy** keychain with **no biometric protection**. This version uses the data-protection keychain, so old secrets are not found and must be re-saved with `keymaster secret set` on the new build.
 
 The old items are still there and are still readable by any process **with no Touch ID prompt**. Removing them is **required** to remove that exposure, not optional:
 
