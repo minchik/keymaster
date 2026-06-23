@@ -28,7 +28,7 @@ nonisolated enum KeychainError: Error, Equatable {
   case duplicate          // set upsert control flow; only surfaces if a concurrent writer re-creates the key mid-upsert
   case noData             // success status but nil data
   case invalidData        // stored bytes are not valid UTF-8
-  case containsNul        // env value has an embedded NUL
+  case containsNul        // value has an embedded NUL — refused at the write seam and again on read (decodeEnvValue)
   case status(String)     // an OSStatus mapped to its SecCopyErrorMessageString text
 
   // The user-facing message. `.duplicate` normally stays internal to the `set`
@@ -47,11 +47,24 @@ nonisolated enum KeychainError: Error, Equatable {
     case .invalidData:
       return "stored secret is not valid UTF-8"
     case .containsNul:
-      return "stored secret contains a NUL byte and cannot be used as an environment variable"
+      // Read correctly at BOTH sites: the write-time store guard (storeSecret) and the
+      // read-time defense-in-depth check (decodeEnvValue), both of which concern a value
+      // that would be injected as an environment variable.
+      return "secret contains a NUL byte and cannot be used as an environment variable"
     case .status(let message):
       return message
     }
   }
+}
+
+// Which Keychain store an operation addresses. Both namespaces live in the same
+// access group and are reached through the one `SystemKeychain` adapter; the
+// adapter maps each case to a service-name prefix (`dev.mnck.` / `dev.mnck.oauth.`)
+// so plain secrets and OAuth records never collide. Defaulting `SecretManager` to
+// `.secret` keeps every existing call site (and its behavior) unchanged.
+nonisolated enum KeychainNamespace: Hashable {
+  case secret
+  case oauth
 }
 
 // An opaque, pre-authenticated batch token. `run` authenticates once (one Touch ID
@@ -68,46 +81,87 @@ nonisolated protocol AuthSession {}
 // `LAContext` adapter-side while letting the `run` batch loop be tested and each
 // read failure be attributed to its key.
 nonisolated protocol KeychainBackend {
-  // Add a biometric-protected item. Throws `.duplicate` if one already exists
-  // under this key (so the caller can run the upsert path), any other failure as
-  // `.status`.
-  func add(key: String, secret: Data) throws
+  // Add a biometric-protected item in `namespace`. Throws `.duplicate` if one
+  // already exists under this key (so the caller can run the upsert path), any
+  // other failure as `.status`.
+  func add(key: String, secret: Data, namespace: KeychainNamespace) throws
 
-  // Read an item, forcing a fresh Touch ID challenge whose prompt names `key` and
-  // uses `verb` (e.g. "Read", "Update", "Remove"). The biometric ACL only
-  // challenges on decryption, so this read is what gates overwrite/remove behind
-  // Touch ID. Returns the decrypted bytes; throws `.noData`/`.status` on failure.
-  func read(key: String, verb: String) throws -> Data
+  // Read an item from `namespace`, forcing a fresh Touch ID challenge whose prompt
+  // names `key` and uses `verb` (e.g. "Read", "Update", "Remove"). The biometric
+  // ACL only challenges on decryption, so this read is what gates overwrite/remove
+  // behind Touch ID. Returns the decrypted bytes; throws `.noData`/`.status` on
+  // failure.
+  func read(key: String, verb: String, namespace: KeychainNamespace) throws -> Data
 
-  // Delete an item. `SecItemDelete` does not decrypt, so this does not challenge
-  // on its own — callers force an authenticated `read` first.
-  func delete(key: String) throws
+  // Delete an item from `namespace`. `SecItemDelete` does not decrypt, so this does
+  // not challenge on its own — callers force an authenticated `read` first.
+  func delete(key: String, namespace: KeychainNamespace) throws
 
   // Pre-authenticate ONE batch with a single Touch ID prompt (the `run` flow).
   // `reason` names every key and the program. Throws `.status` if the user
-  // cancels or auth fails, so the caller aborts before exec.
+  // cancels or auth fails, so the caller aborts before exec. Namespace-agnostic:
+  // one `LAContext` reads across both stores in the same access group.
   func authenticate(reason: String) throws -> AuthSession
 
-  // Read an item through a pre-authenticated session (no further prompt). Used by
-  // the `run` batch so all secrets unlock under the one `authenticate` prompt.
-  func read(key: String, using session: AuthSession) throws -> Data
+  // Read an item from `namespace` through a pre-authenticated session (no further
+  // prompt). Used by the `run` batch so all secrets unlock under the one
+  // `authenticate` prompt.
+  func read(key: String, using session: AuthSession, namespace: KeychainNamespace) throws -> Data
+
+  // Probe for an item's presence WITHOUT decrypting it, so it does NOT trigger
+  // Touch ID. Used to classify a name's namespace (`.secret` vs `.oauth`) before
+  // any prompt. Returns true iff an item exists under `key` in `namespace`, false
+  // only on a definitive "not found"; any other status (e.g. a locked keychain or
+  // `errSecInteractionNotAllowed`) THROWS rather than reading as absent. This
+  // fail-closed behavior is security-relevant: the namespace classifier and the
+  // cross-namespace guard must refuse to act on an unknown state rather than guess
+  // "absent" (which would false-not-found a real item, or let both creators write
+  // the same name into different stores, breaking "one name, one store").
+  func exists(key: String, namespace: KeychainNamespace) throws -> Bool
+
+  // Classify presence THROUGH a pre-authenticated session, so the probe rides the
+  // caller's single approval (no extra prompt) instead of evaluating the item's ACL
+  // on its own. Used by the authenticate-first `get`/`run` resolver to classify a
+  // name's namespace AFTER the one Touch ID prompt. Same fail-closed contract as
+  // `exists(key:namespace:)`: `false` only on a definitive "not found", THROWS on any
+  // other status so a transient error never reads as "absent".
+  func exists(key: String, using session: AuthSession, namespace: KeychainNamespace) throws -> Bool
+
+  // Replace an item's data in place THROUGH a pre-authenticated session, so the write
+  // rides the caller's single approval (atomic, no extra prompt). Lets the rotation
+  // write-back persist a new refresh token under the same prompt that authorized the
+  // read, instead of triggering a separate biometric challenge. This is the only
+  // `update` form: on a `.biometryAny` item a context-less update would modify the
+  // protected item WITHOUT the caller's approval, so the OS would authorize it
+  // separately — a SECOND Touch ID prompt — which is exactly what the session-aware
+  // form avoids. Throws `.status` if the item is absent or the update fails.
+  func update(key: String, secret: Data, using session: AuthSession, namespace: KeychainNamespace) throws
 }
 
 // The testable orchestration over a `KeychainBackend`. The security-critical
 // ordering of primitive calls lives here (not in the adapter) so it can be
 // exercised against a fake: `set` is an upsert that forces an authenticated read
-// before overwriting; `remove` reads before it deletes; `resolveEnvironment`
-// authenticates once for the whole `run` batch and names the offending key on any
-// failure. Everything maps to the same observable behavior the pre-refactor CLI
-// had — same prompt verbs, same error text, same abort-before-exec.
+// before overwriting; `remove` reads before it deletes. (The `run` batch flow now
+// lives in `OAuthManager.resolveRunEnvironment`, which resolves mixed plain+OAuth
+// batches under one prompt.) Everything maps to the same observable behavior the
+// pre-refactor CLI had — same prompt verbs, same error text, same abort-before-exec.
 nonisolated struct SecretManager {
   let backend: KeychainBackend
+  // Which store every operation targets. Defaulted to `.secret` so the existing
+  // plain-secret call sites are unchanged; OAuth-record management constructs the
+  // manager with `.oauth`.
+  let namespace: KeychainNamespace
+
+  init(backend: KeychainBackend, namespace: KeychainNamespace = .secret) {
+    self.backend = backend
+    self.namespace = namespace
+  }
 
   // Retrieve and decode a secret. The backend's `read` forces a Touch ID prompt
   // (verb "Read") and throws `.noData`/`.status` on failure; non-UTF-8 bytes are
   // rejected here as `.invalidData`. Mirrors the old get → `secretString` path.
   func get(key: String) throws -> String {
-    let data = try backend.read(key: key, verb: "Read")
+    let data = try backend.read(key: key, verb: "Read", namespace: namespace)
     return try decodeSecret(data)
   }
 
@@ -121,11 +175,11 @@ nonisolated struct SecretManager {
   // invariant and is asserted in the tests.
   func set(key: String, secret: Data) throws {
     do {
-      try backend.add(key: key, secret: secret)
+      try backend.add(key: key, secret: secret, namespace: namespace)
     } catch KeychainError.duplicate {
-      _ = try backend.read(key: key, verb: "Update")
-      try backend.delete(key: key)
-      try backend.add(key: key, secret: secret)
+      _ = try backend.read(key: key, verb: "Update", namespace: namespace)
+      try backend.delete(key: key, namespace: namespace)
+      try backend.add(key: key, secret: secret, namespace: namespace)
     }
   }
 
@@ -134,8 +188,8 @@ nonisolated struct SecretManager {
   // prompts) first and delete only when it succeeds. A read failure aborts before
   // the delete, so a cancelled prompt leaves the secret in place.
   func remove(key: String) throws {
-    _ = try backend.read(key: key, verb: "Remove")
-    try backend.delete(key: key)
+    _ = try backend.read(key: key, verb: "Remove", namespace: namespace)
+    try backend.delete(key: key, namespace: namespace)
   }
 
   // Resolve a batch of `--key` mappings into an [env: value] dictionary for `run`,
@@ -154,7 +208,7 @@ nonisolated struct SecretManager {
     var injected: [String: String] = [:]
     for mapping in mappings {
       do {
-        let data = try backend.read(key: mapping.key, using: session)
+        let data = try backend.read(key: mapping.key, using: session, namespace: namespace)
         injected[mapping.env] = try decodeEnvValue(data)
       } catch let error as KeychainError {
         throw KeychainError.status("\(mapping.key): \(error.message)")
@@ -179,7 +233,12 @@ nonisolated func decodeSecret(_ data: Data) throws -> String {
 // decode), Process.run() would then abort with an uncatchable NSException from
 // -[NSString fileSystemRepresentation] rather than a Swift error. Rejecting it
 // here lets the batch abort before exec with a controlled message. The caller
-// (`SecretManager.resolveEnvironment`) tags the thrown message with the key.
+// (`OAuthManager.resolveRunEnvironment`) tags the thrown message with the key.
+//
+// `storeSecret` now refuses to WRITE a NUL value in the first place, so this
+// read-time check is defense-in-depth for legacy or out-of-band bytes (an item
+// written by an older keymaster before the write guard, or by another tool in the
+// access group) — a NUL can never originate from a current `set`/`oauth set`.
 nonisolated func decodeEnvValue(_ data: Data) throws -> String {
   let secret = try decodeSecret(data)
   guard !secret.contains("\0") else {

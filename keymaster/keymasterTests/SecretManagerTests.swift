@@ -23,8 +23,8 @@ struct SecretManagerTests {
     // prompting Touch ID on a brand-new key (the ACL is evaluated on access).
     let backend = FakeKeychainBackend()
     try SecretManager(backend: backend).set(key: "K", secret: Data("secret".utf8))
-    #expect(backend.calls == [.add("K")])
-    #expect(backend.store["K"] == Data("secret".utf8))
+    #expect(backend.calls == [.add("K", namespace: .secret)])
+    #expect(backend.storedData("K") == Data("secret".utf8))
   }
 
   // MARK: set — overwrite
@@ -36,12 +36,12 @@ struct SecretManagerTests {
     let backend = FakeKeychainBackend(store: ["K": Data("old".utf8)])
     try SecretManager(backend: backend).set(key: "K", secret: Data("new".utf8))
     #expect(backend.calls == [
-      .add("K"),
-      .read("K", verb: "Update"),
-      .delete("K"),
-      .add("K")
+      .add("K", namespace: .secret),
+      .read("K", verb: "Update", namespace: .secret),
+      .delete("K", namespace: .secret),
+      .add("K", namespace: .secret)
     ])
-    #expect(backend.store["K"] == Data("new".utf8))
+    #expect(backend.storedData("K") == Data("new".utf8))
   }
 
   @Test func setAuthReadFailureAbortsWithNoDeleteOrReadd() {
@@ -53,8 +53,8 @@ struct SecretManagerTests {
     #expect(throws: KeychainError.status("Touch ID failed")) {
       try SecretManager(backend: backend).set(key: "K", secret: Data("new".utf8))
     }
-    #expect(backend.calls == [.add("K"), .read("K", verb: "Update")])
-    #expect(backend.store["K"] == Data("old".utf8))
+    #expect(backend.calls == [.add("K", namespace: .secret), .read("K", verb: "Update", namespace: .secret)])
+    #expect(backend.storedData("K") == Data("old".utf8))
   }
 
   @Test func setPropagatesNonDuplicateAddFailure() {
@@ -65,7 +65,7 @@ struct SecretManagerTests {
     #expect(throws: KeychainError.status("disk full")) {
       try SecretManager(backend: backend).set(key: "K", secret: Data("new".utf8))
     }
-    #expect(backend.calls == [.add("K")])
+    #expect(backend.calls == [.add("K", namespace: .secret)])
   }
 
   @Test func setDeleteFailureAbortsBeforeReAddLeavingOldSecret() {
@@ -78,8 +78,8 @@ struct SecretManagerTests {
     #expect(throws: KeychainError.status("delete failed")) {
       try SecretManager(backend: backend).set(key: "K", secret: Data("new".utf8))
     }
-    #expect(backend.calls == [.add("K"), .read("K", verb: "Update"), .delete("K")])
-    #expect(backend.store["K"] == Data("old".utf8))
+    #expect(backend.calls == [.add("K", namespace: .secret), .read("K", verb: "Update", namespace: .secret), .delete("K", namespace: .secret)])
+    #expect(backend.storedData("K") == Data("old".utf8))
   }
 
   @Test func setReAddFailureAfterDeletePropagates() {
@@ -94,12 +94,12 @@ struct SecretManagerTests {
       try SecretManager(backend: backend).set(key: "K", secret: Data("new".utf8))
     }
     #expect(backend.calls == [
-      .add("K"),
-      .read("K", verb: "Update"),
-      .delete("K"),
-      .add("K")
+      .add("K", namespace: .secret),
+      .read("K", verb: "Update", namespace: .secret),
+      .delete("K", namespace: .secret),
+      .add("K", namespace: .secret)
     ])
-    #expect(backend.store["K"] == nil)
+    #expect(backend.storedData("K") == nil)
   }
 
   // MARK: remove
@@ -109,8 +109,8 @@ struct SecretManagerTests {
     // deleting, since delete does not decrypt and would not challenge on its own.
     let backend = FakeKeychainBackend(store: ["K": Data("v".utf8)])
     try SecretManager(backend: backend).remove(key: "K")
-    #expect(backend.calls == [.read("K", verb: "Remove"), .delete("K")])
-    #expect(backend.store["K"] == nil)
+    #expect(backend.calls == [.read("K", verb: "Remove", namespace: .secret), .delete("K", namespace: .secret)])
+    #expect(backend.storedData("K") == nil)
   }
 
   @Test func removeReadFailureAbortsWithNoDelete() {
@@ -120,8 +120,8 @@ struct SecretManagerTests {
     #expect(throws: KeychainError.status("Touch ID failed")) {
       try SecretManager(backend: backend).remove(key: "K")
     }
-    #expect(backend.calls == [.read("K", verb: "Remove")])
-    #expect(backend.store["K"] == Data("v".utf8))
+    #expect(backend.calls == [.read("K", verb: "Remove", namespace: .secret)])
+    #expect(backend.storedData("K") == Data("v".utf8))
   }
 
   // MARK: get
@@ -130,7 +130,7 @@ struct SecretManagerTests {
     let backend = FakeKeychainBackend(store: ["K": Data("hunter2".utf8)])
     let secret = try SecretManager(backend: backend).get(key: "K")
     #expect(secret == "hunter2")
-    #expect(backend.calls == [.read("K", verb: "Read")])
+    #expect(backend.calls == [.read("K", verb: "Read", namespace: .secret)])
   }
 
   @Test func getRejectsNonUtf8AsInvalidData() {
@@ -172,8 +172,8 @@ struct SecretManagerTests {
     )
     #expect(backend.calls == [
       .authenticate(reason: "Run \"x\" with keychain secrets: \"a\", \"b\""),
-      .readUsing("a"),
-      .readUsing("b")
+      .readUsing("a", namespace: .secret),
+      .readUsing("b", namespace: .secret)
     ])
   }
 
@@ -234,14 +234,14 @@ struct SecretManagerTests {
         reason: "reason"
       )
     }
-    #expect(backend.calls == [.authenticate(reason: "reason"), .readUsing("a")])
+    #expect(backend.calls == [.authenticate(reason: "reason"), .readUsing("a", namespace: .secret)])
   }
 
   @Test func resolveNulValueAbortsNamingTheKey() {
     // An embedded NUL can't be a POSIX env value; abort before exec, key-named.
     let backend = FakeKeychainBackend(store: ["bar": Data("a\0b".utf8)])
     #expect(throws: KeychainError.status(
-      "bar: stored secret contains a NUL byte and cannot be used as an environment variable"
+      "bar: secret contains a NUL byte and cannot be used as an environment variable"
     )) {
       _ = try SecretManager(backend: backend).resolveEnvironment(
         mappings: [KeyMapping(env: "BAR", key: "bar")],
@@ -283,6 +283,122 @@ struct SecretManagerTests {
       )
     }
     #expect(backend.calls == [.authenticate(reason: "reason")])
+  }
+
+}
+
+// Tests for the namespace-aware behavior the seam gained in this task: the
+// no-prompt `exists` probe, the in-place `update` primitive, and the isolation of
+// the `.secret` and `.oauth` stores from one another. These exercise
+// FakeKeychainBackend directly (it is the only KeychainBackend conformer that can
+// run headless) plus SecretManager's threading of its `namespace` through to it.
+struct KeychainNamespaceTests {
+
+  // MARK: exists
+
+  @Test func existsReportsPresentAndAbsentWithoutMutating() throws {
+    let backend = FakeKeychainBackend(store: ["K": Data("v".utf8)])
+    #expect(try backend.exists(key: "K", namespace: .secret))
+    #expect(!(try backend.exists(key: "missing", namespace: .secret)))
+    // The probe must not mutate the store — the value is untouched after probing.
+    #expect(backend.storedData("K") == Data("v".utf8))
+    // It records `.exists` calls but never reads/decodes (no `.read`).
+    #expect(backend.calls == [
+      .exists("K", namespace: .secret),
+      .exists("missing", namespace: .secret)
+    ])
+  }
+
+  @Test func existsIsNamespaceScoped() throws {
+    // A name present in `.secret` is NOT reported present in `.oauth`, and vice
+    // versa — the two stores are independent.
+    let backend = FakeKeychainBackend(store: [.secret: ["K": Data("v".utf8)]])
+    #expect(try backend.exists(key: "K", namespace: .secret))
+    #expect(!(try backend.exists(key: "K", namespace: .oauth)))
+  }
+
+  @Test func existsPropagatesProgrammedError() {
+    // Fail-closed contract: a programmed transient error throws rather than reading
+    // as absent. (The real adapter throws on any non-success / non-notFound status.)
+    let backend = FakeKeychainBackend(store: ["K": Data("v".utf8)])
+    backend.existsErrors["K"] = [.secret: .status("keychain locked")]
+    #expect(throws: KeychainError.status("keychain locked")) {
+      _ = try backend.exists(key: "K", namespace: .secret)
+    }
+    // The error path leaves the store unmutated — `exists` is a pure probe.
+    #expect(backend.storedData("K") == Data("v".utf8))
+  }
+
+  // MARK: update
+
+  @Test func updateReplacesPresentItemInPlace() throws {
+    // `update` is session-aware only (the rotation write-back rides the caller's single
+    // approval), so it is driven through a session here.
+    let backend = FakeKeychainBackend(store: ["K": Data("old".utf8)])
+    let session = try backend.authenticate(reason: "r")
+    try backend.update(key: "K", secret: Data("new".utf8), using: session, namespace: .secret)
+    #expect(backend.storedData("K") == Data("new".utf8))
+    #expect(backend.calls == [.authenticate(reason: "r"), .updateUsing("K", namespace: .secret)])
+  }
+
+  @Test func updateThrowsOnAbsentItem() throws {
+    // Mirrors the real SecItemUpdate: updating a missing item fails (it does not
+    // create one).
+    let backend = FakeKeychainBackend()
+    let session = try backend.authenticate(reason: "r")
+    #expect(throws: KeychainError.status("item not found")) {
+      try backend.update(key: "K", secret: Data("new".utf8), using: session, namespace: .secret)
+    }
+    #expect(backend.storedData("K") == nil)
+  }
+
+  @Test func updatePropagatesProgrammedError() throws {
+    let backend = FakeKeychainBackend(store: ["K": Data("old".utf8)])
+    backend.updateErrors["K"] = .status("update failed")
+    let session = try backend.authenticate(reason: "r")
+    #expect(throws: KeychainError.status("update failed")) {
+      try backend.update(key: "K", secret: Data("new".utf8), using: session, namespace: .secret)
+    }
+    // The old value is left intact when the update fails.
+    #expect(backend.storedData("K") == Data("old".utf8))
+  }
+
+  // MARK: namespace isolation
+
+  @Test func sameNameInBothNamespacesIsIndependent() throws {
+    // Storing "K" in `.secret` and "K" in `.oauth` keeps two distinct values; a
+    // read/update on one never touches the other.
+    let backend = FakeKeychainBackend(store: [
+      .secret: ["K": Data("plain".utf8)],
+      .oauth: ["K": Data("record".utf8)]
+    ])
+    #expect(try backend.read(key: "K", verb: "Read", namespace: .secret) == Data("plain".utf8))
+    #expect(try backend.read(key: "K", verb: "Read", namespace: .oauth) == Data("record".utf8))
+    let session = try backend.authenticate(reason: "r")
+    try backend.update(key: "K", secret: Data("record2".utf8), using: session, namespace: .oauth)
+    #expect(backend.storedData("K", namespace: .secret) == Data("plain".utf8))
+    #expect(backend.storedData("K", namespace: .oauth) == Data("record2".utf8))
+  }
+
+  // MARK: SecretManager threads its namespace
+
+  @Test func secretManagerOnOauthTargetsOauthNamespace() throws {
+    // A SecretManager built with `.oauth` issues every primitive against `.oauth`,
+    // so OAuth-record management reuses the upsert/read-before-delete logic without
+    // leaking into the plain-secret store.
+    let backend = FakeKeychainBackend()
+    let manager = SecretManager(backend: backend, namespace: .oauth)
+    try manager.set(key: "rec", secret: Data("{}".utf8))
+    #expect(backend.calls == [.add("rec", namespace: .oauth)])
+    #expect(backend.storedData("rec", namespace: .oauth) == Data("{}".utf8))
+    #expect(backend.storedData("rec", namespace: .secret) == nil)
+  }
+
+  @Test func secretManagerDefaultsToSecretNamespace() throws {
+    // The defaulted initializer keeps the existing call sites on `.secret`.
+    let backend = FakeKeychainBackend()
+    try SecretManager(backend: backend).set(key: "K", secret: Data("v".utf8))
+    #expect(backend.calls == [.add("K", namespace: .secret)])
   }
 
 }

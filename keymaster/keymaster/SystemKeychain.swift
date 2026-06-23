@@ -18,8 +18,37 @@ import Foundation
 import LocalAuthentication
 import Security
 
-nonisolated let servicePrefix = "dev.mnck."
-nonisolated let account = "keymaster"
+// Map a namespace to the fixed account that — together with the service prefix —
+// forms the generic-password primary key. Plain secrets keep the historical
+// `keymaster` account; OAuth records get a DISTINCT account so the two stores can
+// never alias. This matters because the plain service prefix (`dev.mnck.`) is a
+// textual prefix of the OAuth one (`dev.mnck.oauth.`): a plain key like
+// `oauth.GitHub` computes the SAME `kSecAttrService` (`dev.mnck.oauth.GitHub`) as
+// OAuth record `GitHub`, so without a discriminator they would be one keychain
+// item. Since the (service, account) pair is the primary key, a per-namespace
+// account keeps them separate for ALL key text, preserving the "each name lives in
+// exactly one store" invariant.
+private nonisolated func account(for namespace: KeychainNamespace) -> String {
+  switch namespace {
+  case .secret:
+    return "keymaster"
+  case .oauth:
+    return "keymaster.oauth"
+  }
+}
+
+// Map a namespace to its Keychain service-name prefix. Combined with the
+// per-namespace `account` above, this separates a plain secret (`dev.mnck.<key>`,
+// account `keymaster`) from an OAuth record (`dev.mnck.oauth.<key>`, account
+// `keymaster.oauth`).
+private nonisolated func servicePrefix(for namespace: KeychainNamespace) -> String {
+  switch namespace {
+  case .secret:
+    return "dev.mnck."
+  case .oauth:
+    return "dev.mnck.oauth."
+  }
+}
 
 // The real Keychain/biometric backend. Translates each primitive of the
 // `KeychainBackend` contract into the matching SecItem*/LAContext call and maps
@@ -33,11 +62,11 @@ nonisolated struct SystemKeychain: KeychainBackend {
   // caller's upsert path (read→delete→add) can replace it under our ACL rather
   // than preserving whatever ACL the existing item carried. A nil access control
   // maps to the `errSecParam` text the old `setPassword` returned.
-  func add(key: String, secret: Data) throws {
+  func add(key: String, secret: Data, namespace: KeychainNamespace) throws {
     guard let accessControl = makeAccessControl() else {
       throw statusError(errSecParam)
     }
-    var addQuery = baseQuery(for: key)
+    var addQuery = baseQuery(for: key, namespace: namespace)
     addQuery[kSecValueData as String] = secret
     addQuery[kSecAttrAccessControl as String] = accessControl
     let status = SecItemAdd(addQuery as CFDictionary, nil)
@@ -50,15 +79,15 @@ nonisolated struct SystemKeychain: KeychainBackend {
   // overwrite/remove behind Touch ID (those callers run it first and proceed only
   // when it succeeds). Returns the raw bytes; UTF-8 validation is the
   // SecretManager layer's job.
-  func read(key: String, verb: String) throws -> Data {
-    let (status, data) = readItem(verb: verb, key: key)
+  func read(key: String, verb: String, namespace: KeychainNamespace) throws -> Data {
+    let (status, data) = readItem(verb: verb, key: key, namespace: namespace)
     return try bytes(status: status, data: data)
   }
 
   // Delete an item. `SecItemDelete` does not decrypt, so it does not challenge on
   // its own — callers force an authenticated `read` first.
-  func delete(key: String) throws {
-    let status = SecItemDelete(baseQuery(for: key) as CFDictionary)
+  func delete(key: String, namespace: KeychainNamespace) throws {
+    let status = SecItemDelete(baseQuery(for: key, namespace: namespace) as CFDictionary)
     guard status == errSecSuccess else { throw statusError(status) }
   }
 
@@ -77,12 +106,83 @@ nonisolated struct SystemKeychain: KeychainBackend {
   // Read an item through the pre-authenticated batch session (no further prompt),
   // reusing its `LAContext` so every secret in a `run` batch unlocks under the one
   // `authenticate` prompt.
-  func read(key: String, using session: AuthSession) throws -> Data {
+  func read(key: String, using session: AuthSession, namespace: KeychainNamespace) throws -> Data {
     guard let session = session as? LAAuthSession else {
       throw KeychainError.status("internal error: unexpected authentication session")
     }
-    let (status, data) = readItem(key: key, context: session.context)
+    let (status, data) = readItem(key: key, context: session.context, namespace: namespace)
     return try bytes(status: status, data: data)
+  }
+
+  // Probe for an item WITHOUT requesting its data: kSecReturnData is false, so the
+  // Keychain never decrypts and the biometric ACL is never evaluated — no Touch ID.
+  // Used to classify a name's namespace before any prompt.
+  //
+  // Fail-closed: only `errSecSuccess` (present) and `errSecItemNotFound` (truly
+  // absent) are conclusive. Any other status — a locked keychain,
+  // `errSecInteractionNotAllowed`, etc. — means the presence could NOT be determined,
+  // so it throws rather than guessing "absent". Reading "absent" on a transient error
+  // would both false-not-found a real item AND let the cross-namespace guard skip its
+  // refusal, allowing the same name in both stores; throwing makes callers refuse to
+  // act on an unknown state.
+  func exists(key: String, namespace: KeychainNamespace) throws -> Bool {
+    var query = baseQuery(for: key, namespace: namespace)
+    query[kSecMatchLimit as String] = kSecMatchLimitOne
+    query[kSecReturnData as String] = false
+    let status = SecItemCopyMatching(query as CFDictionary, nil)
+    switch status {
+    case errSecSuccess:
+      return true
+    case errSecItemNotFound:
+      return false
+    default:
+      throw statusError(status)
+    }
+  }
+
+  // Probe presence THROUGH a pre-authenticated session, riding the caller's single
+  // approval. kSecReturnData is false (no decrypt), and the session's authenticated
+  // context is attached via kSecUseAuthenticationContext, so this classify probe runs
+  // under the one Touch ID prompt the caller already obtained. Same fail-closed
+  // contract as the context-less `exists`: only `errSecSuccess`/`errSecItemNotFound`
+  // are conclusive; any other status throws rather than guessing "absent".
+  func exists(key: String, using session: AuthSession, namespace: KeychainNamespace) throws -> Bool {
+    guard let session = session as? LAAuthSession else {
+      throw KeychainError.status("internal error: unexpected authentication session")
+    }
+    var query = baseQuery(for: key, namespace: namespace)
+    query[kSecMatchLimit as String] = kSecMatchLimitOne
+    query[kSecReturnData as String] = false
+    query[kSecUseAuthenticationContext as String] = session.context
+    let status = SecItemCopyMatching(query as CFDictionary, nil)
+    switch status {
+    case errSecSuccess:
+      return true
+    case errSecItemNotFound:
+      return false
+    default:
+      throw statusError(status)
+    }
+  }
+
+  // Replace an item's stored bytes in place via SecItemUpdate, THROUGH a
+  // pre-authenticated session. This rewrites only kSecValueData, leaving the access
+  // control intact, and does NOT decrypt the existing value. It still touches a
+  // `.biometryAny`-protected item, so it attaches the session's authenticated context
+  // via kSecUseAuthenticationContext — the in-place write rides the caller's single
+  // approval (atomic and prompt-free) instead of provoking a SEPARATE Touch ID prompt.
+  // This is the rotation write-back's path under the authenticate-first `get`/`run`
+  // resolver. A non-success status (e.g. errSecItemNotFound when the item is absent)
+  // maps to `.status`.
+  func update(key: String, secret: Data, using session: AuthSession, namespace: KeychainNamespace) throws {
+    guard let session = session as? LAAuthSession else {
+      throw KeychainError.status("internal error: unexpected authentication session")
+    }
+    let attributes = [kSecValueData as String: secret]
+    var query = baseQuery(for: key, namespace: namespace)
+    query[kSecUseAuthenticationContext as String] = session.context
+    let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+    guard status == errSecSuccess else { throw statusError(status) }
   }
 }
 
@@ -172,7 +272,7 @@ nonisolated func authenticatedContext(reason: String) -> LAContext? {
 }
 
 // The fields every Keychain query shares: the item class plus the namespaced
-// service and fixed account that together identify one stored secret. Each
+// service and namespaced account that together identify one stored secret. Each
 // operation extends this with the keys specific to add/read/remove.
 //
 // kSecUseDataProtectionKeychain pins every operation to the modern
@@ -180,11 +280,11 @@ nonisolated func authenticatedContext(reason: String) -> LAContext? {
 // keychain-access-groups entitlement are only honored there; without this the
 // items would target the legacy file keychain. The single access group from
 // the entitlement is applied by default, so kSecAttrAccessGroup is not set.
-nonisolated func baseQuery(for key: String) -> [String: Any] {
+nonisolated func baseQuery(for key: String, namespace: KeychainNamespace) -> [String: Any] {
   [
     kSecClass as String: kSecClassGenericPassword,
-    kSecAttrService as String: servicePrefix + key,
-    kSecAttrAccount as String: account,
+    kSecAttrService as String: servicePrefix(for: namespace) + key,
+    kSecAttrAccount as String: account(for: namespace),
     kSecUseDataProtectionKeychain as String: true
   ]
 }
@@ -193,16 +293,16 @@ nonisolated func baseQuery(for key: String) -> [String: Any] {
 // uses `verb` (e.g. "Read", "Remove", "Update"). Delegates to the context-based
 // overload with a fresh per-key context, so set/get/rm keep prompting exactly as
 // before. Returns the raw OSStatus alongside the secret data (nil unless success).
-nonisolated func readItem(verb: String, key: String) -> (OSStatus, Data?) {
-  readItem(key: key, context: authContext(verb: verb, key: key))
+nonisolated func readItem(verb: String, key: String, namespace: KeychainNamespace) -> (OSStatus, Data?) {
+  readItem(key: key, context: authContext(verb: verb, key: key), namespace: namespace)
 }
 
 // Read one item through a caller-supplied LAContext. `run` passes a single
 // pre-authenticated context (see authenticatedContext) so a batch of reads share
 // one Touch ID prompt; the per-key callers above pass a fresh context each time.
 // Returns the raw OSStatus alongside the secret data (nil unless success).
-nonisolated func readItem(key: String, context: LAContext) -> (OSStatus, Data?) {
-  var query = baseQuery(for: key)
+nonisolated func readItem(key: String, context: LAContext, namespace: KeychainNamespace) -> (OSStatus, Data?) {
+  var query = baseQuery(for: key, namespace: namespace)
   query[kSecMatchLimit as String] = kSecMatchLimitOne
   query[kSecReturnData as String] = true
   query[kSecUseAuthenticationContext as String] = context

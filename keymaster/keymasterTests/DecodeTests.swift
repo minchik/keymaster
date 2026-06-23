@@ -59,7 +59,7 @@ struct DecodeTests {
     #expect(KeychainError.noData.message == "keychain returned no data")
     #expect(KeychainError.invalidData.message == "stored secret is not valid UTF-8")
     #expect(KeychainError.containsNul.message
-      == "stored secret contains a NUL byte and cannot be used as an environment variable")
+      == "secret contains a NUL byte and cannot be used as an environment variable")
     #expect(KeychainError.status("a message").message == "a message")
     // `.duplicate` can surface only on the upsert re-add race; its text must equal
     // SecCopyErrorMessageString(errSecDuplicateItem), which the pre-refactor
