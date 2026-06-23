@@ -1,6 +1,6 @@
 # Keymaster
 
-Keymaster lets scripts store and read macOS Keychain secrets guarded by Touch ID.
+Keymaster lets scripts store and read macOS Keychain secrets guarded by Touch ID **or a paired Apple Watch**.
 
 Macs come with the `security` command which can get and set secrets in the Keychain:
 
@@ -15,9 +15,9 @@ security find-generic-password -s "MyKeyName" -w
 
 You can use `security` in a script, but (AFAIK) you can't tell it to guard secrets with biometrics — you have to enter the password each time, or "always allow" the `security` binary to access the secret. "Always allow" is exactly the weakening you don't want: it lets any process running as you read the plaintext with no challenge.
 
-🔑 Keymaster fixes this. Each secret is stored in the **data-protection keychain** with a biometric access-control object (`.biometryAny`) and scoped to keymaster's own keychain access group, so:
+🔑 Keymaster fixes this. Each secret is stored in the **data-protection keychain** with a biometric access-control object (`[.biometryAny, .or, .companion]`) and scoped to keymaster's own keychain access group, so:
 
-- **Reading a secret triggers a Touch ID challenge from the Keychain itself** — there is no "always allow" to grant.
+- **Reading a secret triggers a Touch ID challenge from the Keychain itself** (a nearby unlocked paired Apple Watch can approve it instead, via a side-button double-click) — there is no "always allow" to grant.
 - The items are **isolated by entitlement**: only a binary signed into keymaster's access group can see them at all. Another process running as you can't read them with `security find-generic-password` — it won't even find them.
 - **Removing and overwriting are gated by Touch ID too.** The Keychain does not challenge removal on its own (removing doesn't decrypt the secret), so keymaster forces an authenticated read first and only proceeds when you approve.
 
@@ -31,7 +31,7 @@ brew install --cask minchik/tap/keymaster
 
 This downloads the signed release `.app` and symlinks the inner `keymaster` CLI onto your `PATH`, so there's nothing to build or sign yourself. Upgrade with `brew upgrade --cask keymaster` and remove with `brew uninstall --cask keymaster`.
 
-Requires a Mac with Touch ID.
+Requires a Mac with Touch ID (a paired, unlocked Apple Watch can approve prompts as an alternative).
 
 ## Building from source
 
@@ -48,7 +48,7 @@ The biometric guard relies on a **restricted entitlement** (`keychain-access-gro
 
 Keymaster depends on [swift-argument-parser](https://github.com/apple/swift-argument-parser); Xcode resolves and fetches it automatically on the first build (the exact version is pinned in the project's committed `Package.resolved`), so the only requirement beyond Xcode is an internet connection on that first build.
 
-Requires a Mac with Touch ID and an Apple signing identity configured in Xcode.
+Requires a Mac with Touch ID (a paired, unlocked Apple Watch can approve prompts as an alternative) and an Apple signing identity configured in Xcode.
 
 ## Save a secret to the keychain
 
@@ -164,7 +164,7 @@ keymaster oauth rm GitHub     # remove the record
 - **Item:** service `dev.mnck.<key>`, account `keymaster`, access group `<TeamID>.dev.mnck.keymaster`.
 - **OAuth records:** the same keychain, access group, accessibility, and access control, but under a separate service prefix `dev.mnck.oauth.<name>` **and** a distinct account `keymaster.oauth`, holding the whole credential as JSON (written canonically at `oauth set` time; a rotation write-back stays decode-equivalent but not byte-canonical). (The distinct account keeps the prefix-overlapping namespaces from ever aliasing — a plain key `oauth.<name>` would otherwise share the OAuth record `<name>`'s service string.)
 - **Accessibility:** `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly` — items never sync to iCloud and never appear in backups, and they are **destroyed if you remove your device passcode**.
-- **`.biometryAny`:** any currently-enrolled fingerprint/face can satisfy the prompt, and the item is *not* invalidated if you later add or remove an enrolled biometric.
+- **`[.biometryAny, .or, .companion]`:** Touch ID (any currently-enrolled fingerprint/face) **or** a paired Apple Watch (side-button double-click) can satisfy the prompt; the item is *not* invalidated if you later add or remove an enrolled biometric. There is **no passcode fallback** (`.userPresence`/`.devicePasscode` are deliberately unused).
 
 ## Migration from the previous version (breaking change)
 
