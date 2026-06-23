@@ -37,6 +37,7 @@
 		DA7B8BBD2FE5BC6900AB4D8F /* Exceptions for "keymaster" folder in "keymasterTests" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				OAuthManager.swift,
 				OAuthRecord.swift,
 				RunSupport.swift,
 				SecretManager.swift,
