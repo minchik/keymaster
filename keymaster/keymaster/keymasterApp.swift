@@ -117,6 +117,21 @@ func fail(_ message: String) -> Never {
   exit(EXIT_FAILURE)
 }
 
+// Print each name on its own line, the `secret ls`/`oauth ls` output. SIGPIPE is
+// ignored first because `ls` is keymaster's only command that streams a variable-
+// length, multi-line stdout: a consumer that closes the pipe early (e.g.
+// `keymaster secret ls | head -1`) would otherwise deliver SIGPIPE on a later
+// `print` and kill the process by signal on an ordinary shell pipeline. With
+// SIG_IGN the write instead fails with EPIPE — which `print` swallows — so the
+// command exits cleanly. This is scoped to the listing path on purpose rather than
+// set process-wide: `run` exec's a child, and a process-wide SIG_IGN could leak the
+// non-default disposition to it, so the streaming command that needs it sets it
+// locally and the exec path keeps SIGPIPE's default behavior.
+func printNames(_ names: [String]) {
+  signal(SIGPIPE, SIG_IGN)
+  for name in names { print(name) }
+}
+
 // Read CFBundleShortVersionString (= MARKETING_VERSION) from the bundle. keymaster
 // ships as a signed .app and is usually run through a symlink (Homebrew puts one in
 // its bin); launched that way, Bundle.main resolves to the symlink's directory, not
@@ -445,9 +460,7 @@ extension Keymaster.Secret {
     func run() {
       let manager = SecretManager(backend: SystemKeychain(), namespace: .secret)
       do {
-        for name in try manager.list(reason: "List stored keychain secrets") {
-          print(name)
-        }
+        printNames(try manager.list(reason: "List stored keychain secrets"))
       } catch let error as KeychainError {
         fail(error.message)
       } catch {
@@ -569,9 +582,7 @@ extension Keymaster.OAuth {
     func run() {
       let manager = SecretManager(backend: SystemKeychain(), namespace: .oauth)
       do {
-        for name in try manager.list(reason: "List stored OAuth records") {
-          print(name)
-        }
+        printNames(try manager.list(reason: "List stored OAuth records"))
       } catch let error as KeychainError {
         fail(error.message)
       } catch {

@@ -469,6 +469,9 @@ struct SecretManagerListTests {
       .authenticate(reason: "List stored keychain secrets"),
       .listUsing(namespace: .secret)
     ])
+    // Even with both stores seeded, the listing rode the single session this backend's
+    // `authenticate` handed out (id 1) — one approval, no second prompt.
+    #expect(backend.sessionUses == [1])
 
     let oauthBackend = FakeKeychainBackend(store: [
       .secret: ["plainB": Data("1".utf8), "plainA": Data("2".utf8)],
@@ -481,6 +484,7 @@ struct SecretManagerListTests {
       .authenticate(reason: "List stored OAuth records"),
       .listUsing(namespace: .oauth)
     ])
+    #expect(oauthBackend.sessionUses == [1])
   }
 
   @Test func listEmptyStoreReturnsEmptyButStillAuthenticates() throws {
@@ -493,6 +497,9 @@ struct SecretManagerListTests {
       .authenticate(reason: "List stored keychain secrets"),
       .listUsing(namespace: .secret)
     ])
+    // The empty enumeration still rode the one session `authenticate` handed out — the
+    // single-approval property holds even when nothing is stored.
+    #expect(backend.sessionUses == [1])
   }
 
   @Test func listAuthFailureDisclosesNothing() {
@@ -505,6 +512,9 @@ struct SecretManagerListTests {
       _ = try SecretManager(backend: backend).list(reason: "List stored keychain secrets")
     }
     #expect(backend.calls == [.authenticate(reason: "List stored keychain secrets")])
+    // No session was ever handed out (authenticate threw) and none was consumed: not only
+    // is `list(using:)` absent from `calls`, but `sessionUses` is empty.
+    #expect(backend.sessionUses == [])
   }
 
   @Test func listPropagatesProgrammedListError() {
@@ -519,6 +529,9 @@ struct SecretManagerListTests {
       .authenticate(reason: "List stored keychain secrets"),
       .listUsing(namespace: .secret)
     ])
+    // The failing enumeration still rode the one approval's session (the fake records the
+    // session before throwing), so a programmed list error doesn't acquire a second one.
+    #expect(backend.sessionUses == [1])
   }
 
 }
