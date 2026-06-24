@@ -345,7 +345,7 @@ extension Keymaster {
     static let configuration = CommandConfiguration(
       commandName: "secret",
       abstract: "Manage plain Keychain secrets.",
-      subcommands: [Set.self, Get.self, Remove.self]
+      subcommands: [Set.self, Get.self, Remove.self, List.self]
     )
   }
 }
@@ -429,6 +429,32 @@ extension Keymaster.Secret {
       print("Key \"\(key)\" has been removed from the keychain")
     }
   }
+
+  // List the names of stored plain secrets, one per line, sorted. Gated by a SINGLE
+  // Touch ID / Apple Watch approval: a bare metadata enumeration never decrypts an
+  // item, so the ACL is never evaluated and no prompt appears on its own —
+  // SecretManager.list forces the approval via `authenticate(reason:)` BEFORE any
+  // name is read, preserving the invariant that keymaster never discloses whether a
+  // name exists without a biometric approval first. An empty store prints nothing.
+  struct List: ParsableCommand {
+    static let configuration = CommandConfiguration(
+      commandName: "ls",
+      abstract: "List stored secret names, gated by Touch ID or Apple Watch."
+    )
+
+    func run() {
+      let manager = SecretManager(backend: SystemKeychain(), namespace: .secret)
+      do {
+        for name in try manager.list(reason: "List stored keychain secrets") {
+          print(name)
+        }
+      } catch let error as KeychainError {
+        fail(error.message)
+      } catch {
+        fail(error.localizedDescription)
+      }
+    }
+  }
 }
 
 extension Keymaster {
@@ -441,7 +467,7 @@ extension Keymaster {
     static let configuration = CommandConfiguration(
       commandName: "oauth",
       abstract: "Manage OAuth refresh-token records used to mint access tokens.",
-      subcommands: [Set.self, Get.self, Remove.self]
+      subcommands: [Set.self, Get.self, Remove.self, List.self]
     )
   }
 }
@@ -526,6 +552,31 @@ extension Keymaster.OAuth {
         fail(error.localizedDescription)
       }
       print("OAuth record \"\(name)\" has been removed from the keychain")
+    }
+  }
+
+  // List the names of stored OAuth records, one per line, sorted. Gated by a SINGLE
+  // Touch ID / Apple Watch approval exactly like `secret ls`: a bare metadata
+  // enumeration never decrypts a record, so SecretManager.list forces the approval
+  // via `authenticate(reason:)` before any name is read — a name's existence is never
+  // disclosed without a biometric approval first. An empty store prints nothing.
+  struct List: ParsableCommand {
+    static let configuration = CommandConfiguration(
+      commandName: "ls",
+      abstract: "List stored OAuth record names, gated by Touch ID or Apple Watch."
+    )
+
+    func run() {
+      let manager = SecretManager(backend: SystemKeychain(), namespace: .oauth)
+      do {
+        for name in try manager.list(reason: "List stored OAuth records") {
+          print(name)
+        }
+      } catch let error as KeychainError {
+        fail(error.message)
+      } catch {
+        fail(error.localizedDescription)
+      }
     }
   }
 }
