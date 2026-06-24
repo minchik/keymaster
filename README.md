@@ -50,6 +50,32 @@ Keymaster depends on [swift-argument-parser](https://github.com/apple/swift-argu
 
 Requires a Mac with Touch ID (a paired, unlocked Apple Watch can approve prompts as an alternative) and an Apple signing identity configured in Xcode.
 
+## Shell completion
+
+keymaster (via [swift-argument-parser](https://github.com/apple/swift-argument-parser)) can generate tab-completion scripts for **bash**, **zsh**, and **fish**. They complete subcommands (`secret`, `oauth`, `get`, `run`, `version`, …) and their flags. Generate a script for your shell with:
+
+```bash
+keymaster --generate-completion-script <bash|zsh|fish>
+```
+
+Then install it where your shell looks for completions:
+
+**fish**
+
+```fish
+keymaster --generate-completion-script fish > ~/.config/fish/completions/keymaster.fish
+```
+
+Open a new shell — fish loads completions from that directory automatically.
+
+**zsh**
+
+If you installed keymaster with Homebrew, write into brew's completion directory (already on your `$fpath`):
+
+```bash
+keymaster --generate-completion-script zsh > "$(brew --prefix)/share/zsh/site-functions/_keymaster"
+```
+
 ## Save a secret to the keychain
 
 The secret is read from **stdin**, never passed as an argument (an argument would leak via `ps` and shell history):
