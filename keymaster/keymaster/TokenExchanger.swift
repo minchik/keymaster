@@ -81,7 +81,8 @@ private nonisolated func formEncode(_ value: String) -> String {
 //             cannot turn into a usable token (non-JSON, or missing the required
 //             field) maps to the same "no access_token" message — the meaningful
 //             problem is that the success reply carried no token. A token carrying a
-//             NUL byte is rejected too (it cannot be safely injected into a child env).
+//             NUL byte is rejected too (it cannot be safely injected into the exec'd
+//             command's environment).
 //   non-2xx → surface the RFC 6749 §5.2 error body `{ error, error_description? }`:
 //             `invalid_grant` is special-cased to a re-auth hint; any other code is
 //             surfaced as `"<error>: <description>"` (or just `"<error>"`). A
@@ -98,11 +99,11 @@ nonisolated func parseTokenResponse(data: Data, status: Int) throws -> TokenResp
       throw KeychainError.status("token endpoint returned no access_token")
     }
     // An access token is RFC 6749 VSCHAR (visible ASCII); a NUL is non-conformant and,
-    // when `run` injects it into a child's environment, would abort Process.run() with
-    // an uncatchable NSException (from -[NSString fileSystemRepresentation]) rather than
-    // a Swift error — exactly what `decodeEnvValue` guards for plain secrets. Reject it
-    // here, the single choke point every minted token passes through, so both `get` and
-    // `run` surface a clean error instead.
+    // when `run` injects it into the `execve` envp via `strdup`, would silently truncate
+    // the C string at the first NUL rather than raise a Swift error — exactly what
+    // `decodeEnvValue` guards for plain secrets. Reject it here, the single choke point
+    // every minted token passes through, so both `get` and `run` surface a clean error
+    // instead.
     guard !response.accessToken.contains("\0") else {
       throw KeychainError.status("token endpoint returned an access_token containing a NUL byte")
     }

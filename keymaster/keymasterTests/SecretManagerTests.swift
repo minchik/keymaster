@@ -377,9 +377,9 @@ struct CrossNamespaceConflictTests {
   @Test func nulValueRefusedBeforeAnyBackendCall() {
     // A value carrying an embedded NUL is refused at the write seam BEFORE the
     // cross-namespace probe — `get`/`run` decode through `decodeEnvValue` (which rejects
-    // NUL) and `Process.run()` aborts on one, so storing it would be permanently
-    // unretrievable. The guard precedes the probe, so the backend records NO calls and
-    // nothing is written in either namespace.
+    // NUL) and `run` injects via `execve`'s strdup (which truncates at the NUL), so
+    // storing it would be permanently unretrievable. The guard precedes the probe, so the
+    // backend records NO calls and nothing is written in either namespace.
     let backend = FakeKeychainBackend()
     #expect(throws: KeychainError.containsNul) {
       try storeSecret(Data("a\0b".utf8), name: "K", in: .secret, conflictingWith: .oauth, backend: backend)

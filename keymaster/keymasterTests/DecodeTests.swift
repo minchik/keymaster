@@ -44,7 +44,7 @@ struct DecodeTests {
 
   @Test func decodeEnvValueRejectsEmbeddedNul() {
     // A POSIX environment value cannot contain a NUL; reject it so the run batch
-    // aborts before exec rather than crashing in Process.run().
+    // aborts before exec rather than being silently truncated at the NUL by `execve`'s strdup.
     #expect(throws: KeychainError.containsNul) {
       _ = try decodeEnvValue(Data("a\0b".utf8))
     }

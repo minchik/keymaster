@@ -261,8 +261,9 @@ nonisolated func storeSecret(
 ) throws {
   // Refuse to store a value with an embedded NUL — it could never be injected as an
   // environment variable later: `get`/`run` decode through `decodeEnvValue` (which
-  // rejects NUL) and `Process.run()` aborts on one, so a stored NUL value would be
-  // permanently unretrievable. Reject it here, at the shared write seam, rather than
+  // rejects NUL), and `run` passes values to `execve` via `strdup`, which truncates the
+  // C string at the first NUL, so a stored NUL value would be permanently
+  // unretrievable. Reject it here, at the shared write seam, rather than
   // accept a write that can never be read back. The guard runs FIRST — before the
   // cross-namespace probe — so a bad value triggers no keychain I/O at all, and it
   // protects BOTH namespaces uniformly (in practice only plain `secret set` can receive a
@@ -286,10 +287,10 @@ nonisolated func decodeSecret(_ data: Data) throws -> String {
 // Decode bytes read for `run` into an environment-variable value. Like
 // `decodeSecret`, but additionally rejects an embedded NUL: a POSIX environment
 // value cannot contain one, and although UTF-8 admits U+0000 (so it survives the
-// decode), Process.run() would then abort with an uncatchable NSException from
-// -[NSString fileSystemRepresentation] rather than a Swift error. Rejecting it
-// here lets the batch abort before exec with a controlled message. The caller
-// (`OAuthManager.resolveRunEnvironment`) tags the thrown message with the key.
+// decode), `run` injects the value into the `execve` envp via `strdup`, which would
+// silently truncate the C string at the first NUL rather than raise a Swift error.
+// Rejecting it here lets the batch abort before exec with a controlled message. The
+// caller (`OAuthManager.resolveRunEnvironment`) tags the thrown message with the key.
 //
 // `storeSecret` now refuses to WRITE a NUL value in the first place, so this
 // read-time check is defense-in-depth for legacy or out-of-band bytes (an item

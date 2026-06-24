@@ -241,11 +241,11 @@ struct TokenExchangerTests {
 
   @Test func parseRejectsAccessTokenContainingNul() {
     // A NUL in the access token is non-conformant (RFC 6749 access tokens are visible
-    // ASCII) and would abort Process.run() uncatchably if `run` injected it into a
-    // child's environment; reject it at parse — the single choke point every minted
-    // token passes through — so both `get` and `run` surface a clean error. The escape
-    // is built from a backslash code point so this source carries no raw NUL; the JSON
-    // text shows the escape as backslash-u-0000, which JSONDecoder turns into a NUL.
+    // ASCII) and would be silently truncated by `execve`'s strdup if `run` injected it
+    // into the exec'd command's environment; reject it at parse — the single choke point
+    // every minted token passes through — so both `get` and `run` surface a clean error.
+    // The escape is built from a backslash code point so this source carries no raw NUL;
+    // the JSON text shows the escape as backslash-u-0000, which JSONDecoder turns into a NUL.
     let backslash = String(UnicodeScalar(UInt8(92)))
     let json = "{ \"access_token\": \"a\(backslash)u0000b\" }"
     #expect(throws: KeychainError.status("token endpoint returned an access_token containing a NUL byte")) {
