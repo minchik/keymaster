@@ -74,6 +74,41 @@ struct RunSupportTests {
     #expect(merged["B"] == "9")
   }
 
+  // MARK: execArgv
+
+  @Test func execArgvWrapsBareNameWithEnvAndDashDash() {
+    // A bare program name is prefixed with /usr/bin/env and "--" so it resolves
+    // against PATH after env stops parsing its own options.
+    #expect(execArgv(command: ["ls"]) == ["/usr/bin/env", "--", "ls"])
+  }
+
+  @Test func execArgvKeepsDashLeadingProgramAfterDashDash() {
+    // The "--" guard means a dash-leading program name is passed through as the
+    // command rather than mistaken for an env option.
+    #expect(execArgv(command: ["-foo"]) == ["/usr/bin/env", "--", "-foo"])
+  }
+
+  @Test func execArgvPreservesProgramArgumentsInOrder() {
+    #expect(execArgv(command: ["echo", "-n", "hi"])
+      == ["/usr/bin/env", "--", "echo", "-n", "hi"])
+  }
+
+  // MARK: execEnvironmentBlock
+
+  @Test func execEnvironmentBlockSortsKeyValueStrings() {
+    #expect(execEnvironmentBlock(["B": "2", "A": "1"]) == ["A=1", "B=2"])
+  }
+
+  @Test func execEnvironmentBlockKeepsEqualsInValue() {
+    // Only the KEY=VALUE join matters; a value containing "=" is left intact
+    // (execve splits the env entry on the first "=" itself).
+    #expect(execEnvironmentBlock(["A": "x=y"]) == ["A=x=y"])
+  }
+
+  @Test func execEnvironmentBlockEmptyDictYieldsEmptyArray() {
+    #expect(execEnvironmentBlock([:]) == [])
+  }
+
   // MARK: runProcess
 
   @Test func runForwardsExitCode() {

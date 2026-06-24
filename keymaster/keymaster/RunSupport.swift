@@ -57,6 +57,25 @@ func mergedEnvironment(
   base.merging(overrides) { _, override in override }
 }
 
+// Build the argv for the exec target. The command is launched through
+// /usr/bin/env, so a bare name like "ls" resolves against PATH, and a "--" is
+// inserted before the command so env stops parsing its own options first.
+// Without it, a command whose first token starts with "-" (a program literally
+// named like "-foo", or one passed that way) is mistaken for an env option and
+// the launch fails with "illegal option" instead of running. Pure, so the argv
+// shape can be unit-tested without exec'ing.
+func execArgv(command: [String]) -> [String] {
+  ["/usr/bin/env", "--"] + command
+}
+
+// Format an environment map as the `KEY=VALUE` strings execve's envp expects.
+// The output is `.sorted()` ONLY for deterministic test assertions — execve's
+// envp is an unordered map and the child does not depend on the order. Pure, so
+// the env-block formatting can be unit-tested without exec'ing.
+func execEnvironmentBlock(_ env: [String: String]) -> [String] {
+  env.map { "\($0.key)=\($0.value)" }.sorted()
+}
+
 // Run `command` (a program name or path followed by its arguments) with `extraEnv`
 // merged over the current process environment. The program is launched through
 // /usr/bin/env, so a bare name like "ls" is resolved against PATH. Stdio is
