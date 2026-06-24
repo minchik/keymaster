@@ -84,6 +84,17 @@ For a strictly plain-only read, use `keymaster secret get MyKeyName` — the pla
 
 A Touch ID prompt (or Apple Watch approval) naming the key (`Remove keychain secret: "MyKeyName"`) appears before the item is removed.
 
+## List stored names
+
+`keymaster secret ls` lists the names of your stored plain secrets, one per line, sorted; `keymaster oauth ls` does the same for [OAuth records](#oauth-refresh-token-records). Each lists **only its own namespace** — a plain secret never shows up under `oauth ls`, and an OAuth record never shows up under `secret ls` (even a plain key literally named `oauth.Foo` lists only under `secret ls`).
+
+```bash
+keymaster secret ls   # Touch ID → prints plain-secret names, one per line, sorted
+keymaster oauth ls    # Touch ID → prints OAuth record names, one per line, sorted
+```
+
+Listing is gated by a **single Touch ID prompt** (which a paired Apple Watch can also approve). A bare name enumeration doesn't decrypt any item, so the Keychain's biometric access control would never challenge it on its own — keymaster forces the prompt *before* reading any name, so it never discloses what is stored without an approval first. **Cancelling the prompt lists nothing.** An empty namespace prints nothing (so `keymaster secret ls | wc -l` is a clean count) and exits zero.
+
 ## Run a command with secrets
 
 `keymaster run` injects one or more keychain secrets into a child process as environment variables, unlocking the whole batch with a **single** Touch ID prompt (which a paired Apple Watch can also approve). It's modelled on `op run`:
@@ -147,12 +158,15 @@ keymaster run --key TOKEN=GitHub -- ./deploy   # injects a freshly-minted TOKEN 
 
 `keymaster get <name>` unlocks the record with one Touch ID prompt (or Apple Watch approval), exchanges the refresh token, and prints **only** the access token to stdout — so `$(keymaster get GitHub)` captures a clean token — while any warning goes to stderr. `keymaster run` treats an OAuth key like a plain one: it is classified through the single prompt and minted into a fresh access token under it. Keymaster never caches a token; it mints a fresh one each time.
 
-Inspect or delete a record (both gated by Touch ID or Apple Watch):
+Inspect, list, or delete records (all gated by Touch ID or Apple Watch):
 
 ```bash
 keymaster oauth get GitHub    # print the stored record as JSON
+keymaster oauth ls            # list stored OAuth record names, one per line, sorted
 keymaster oauth rm GitHub     # remove the record
 ```
+
+See [List stored names](#list-stored-names) for how `oauth ls` is gated.
 
 **No redirects.** The token exchange never follows HTTP redirects — to avoid resending the refresh token (and any `client_secret`) to another host, a token endpoint that responds with a 3xx **fails** the request rather than minting.
 
