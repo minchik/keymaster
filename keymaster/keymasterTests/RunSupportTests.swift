@@ -105,6 +105,12 @@ struct RunSupportTests {
     #expect(execEnvironmentBlock(["A": "x=y"]) == ["A=x=y"])
   }
 
+  @Test func execEnvironmentBlockKeepsEmptyValue() {
+    // An empty secret injects a legal `KEY=` entry; the formatter must keep the
+    // bare trailing "=" rather than drop the key or the separator.
+    #expect(execEnvironmentBlock(["A": ""]) == ["A="])
+  }
+
   @Test func execEnvironmentBlockEmptyDictYieldsEmptyArray() {
     #expect(execEnvironmentBlock([:]) == [])
   }
