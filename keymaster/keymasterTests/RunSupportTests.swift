@@ -109,48 +109,4 @@ struct RunSupportTests {
     #expect(execEnvironmentBlock([:]) == [])
   }
 
-  // MARK: runProcess
-
-  @Test func runForwardsExitCode() {
-    #expect(runProcess(command: ["/bin/sh", "-c", "exit 7"], extraEnv: [:]) == 7)
-  }
-
-  @Test func runReportsSignalDeathAs128PlusSigno() {
-    // SIGTERM is signal 15, so a SIGTERM death is reported as 128 + 15 = 143.
-    #expect(runProcess(command: ["/bin/sh", "-c", "kill -TERM $$"], extraEnv: [:]) == 143)
-  }
-
-  // A var name that won't exist in a developer/CI shell, so the no-injection case
-  // below truly tests the unset fallback rather than inheriting an ambient value
-  // (runProcess deliberately preserves ProcessInfo.processInfo.environment).
-  @Test func runInjectsExtraEnvIntoChild() {
-    // The child exits with the var when set, so a forwarded 7 proves it reached it.
-    #expect(runProcess(
-      command: ["/bin/sh", "-c", "exit ${KEYMASTER_TEST_VAR:-99}"],
-      extraEnv: ["KEYMASTER_TEST_VAR": "7"]
-    ) == 7)
-  }
-
-  @Test func runWithoutInjectionLeavesVarUnset() {
-    // Same child without the override falls back to 99, confirming no leakage.
-    #expect(runProcess(
-      command: ["/bin/sh", "-c", "exit ${KEYMASTER_TEST_VAR:-99}"],
-      extraEnv: [:]
-    ) == 99)
-  }
-
-  @Test func runResolvesBareProgramNameViaPath() {
-    // /usr/bin/env resolves a bare name against PATH, so "true"/"false" run directly.
-    #expect(runProcess(command: ["true"], extraEnv: [:]) == 0)
-    #expect(runProcess(command: ["false"], extraEnv: [:]) == 1)
-  }
-
-  @Test func runTreatsDashLeadingProgramAsCommandNotEnvOption() {
-    // runProcess prepends "--" so /usr/bin/env stops parsing its own options. A
-    // dash-leading program name therefore reaches PATH resolution and fails as
-    // "command not found" (127) rather than as an "illegal option" env error —
-    // without the "--" this would not run at all.
-    #expect(runProcess(command: ["-keymaster-no-such-prog"], extraEnv: [:]) == 127)
-  }
-
 }

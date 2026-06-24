@@ -28,8 +28,9 @@ function_body_length:
   error: 120
 
 # keymasterApp.swift carries the CLI surface for every subcommand (set/get/rm/run
-# plus the oauth group) with the project's heavy explanatory comments, so it runs
-# past the 400-line default. Raise the threshold rather than thin the documentation.
+# plus the oauth group) plus the app-only exec syscall wrapper (execCommand), all
+# with the project's heavy explanatory comments, so it runs past the 400-line
+# default. Raise the threshold rather than thin the documentation.
 file_length:
-  warning: 600
+  warning: 700
   error: 800

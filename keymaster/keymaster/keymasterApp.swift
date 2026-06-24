@@ -283,8 +283,10 @@ extension Keymaster {
         fail(error.localizedDescription)
       }
       for key in staleKeys { warnStaleRefreshToken(key) }
-      // Qualify exit so it resolves to libc's, not ParsableCommand.exit(withError:).
-      Foundation.exit(runProcess(command: command, extraEnv: injected))
+      // Replace this process with the command (execCommand never returns). All
+      // keychain/OAuth work and stale-token warnings are done above — exec
+      // discards the LAContext and everything else, so nothing runs after it.
+      execCommand(command: command, extraEnv: injected)
     }
   }
 }
@@ -297,6 +299,63 @@ func warnStaleRefreshToken(_ key: String) {
   let message = "Warning: \"\(key)\" rotated its refresh token but the new one could not be saved; "
     + "re-run `keymaster oauth set \(key)` to store it.\n"
   FileHandle.standardError.write(Data(message.utf8))
+}
+
+// Replace the current process image with `command`, run through /usr/bin/env (so a
+// bare program name resolves against PATH and the `--` guard in execArgv keeps a
+// dash-leading program from being parsed as an env option), with `extraEnv` merged
+// over the current environment. keymaster BECOMES the command via execve: the child
+// inherits keymaster's PID, its already-foreground process group, and the real
+// controlling terminal on stdin/stdout/stderr — which is what lets interactive TUIs
+// (claude, pi, vim, less, …) receive keyboard input. Exit/signal status propagates
+// for free: a signal terminates this (now the child's) process directly, exactly as
+// running the program without keymaster would (no synthesized 128 + signo).
+//
+// This is an un-testable raw syscall wrapper, so — like SystemKeychain.swift and
+// URLSessionTokenExchanger.swift — it lives in app-only code (not the test bundle)
+// and is covered by the manual checklist; its pure inputs (execArgv,
+// execEnvironmentBlock) are unit-tested.
+//
+// execve only returns on FAILURE, hence `-> Never`. Two distinct 127 paths: a
+// missing target PROGRAM is handled by /usr/bin/env itself (its own message, exit
+// 127); the failures handled here — execve("/usr/bin/env", …) itself failing (env
+// missing/unexecutable, near-impossible on macOS) or a strdup allocation failure —
+// print `Error: could not run command…` and exit 127.
+//
+// strdup truncates at the first embedded NUL, which is safe because every value
+// reaching here is already NUL-free (plain secrets are NUL-rejected at decode, OAuth
+// access tokens at exchange, and env names come from --key argv which cannot contain
+// a NUL). A nil strdup return (allocation failure) must NOT land in the array: a
+// NULL in the middle of a NULL-terminated C array silently truncates it, so on any
+// nil we bail with exit(127) rather than hand execve a corrupt array.
+func execCommand(command: [String], extraEnv: [String: String]) -> Never {
+  let env = mergedEnvironment(
+    base: ProcessInfo.processInfo.environment,
+    overrides: extraEnv
+  )
+
+  func buildCArray(_ strings: [String]) -> [UnsafeMutablePointer<CChar>?] {
+    var array = [UnsafeMutablePointer<CChar>?]()
+    for string in strings {
+      guard let dup = strdup(string) else {
+        FileHandle.standardError.write(Data("Error: could not run command\n".utf8))
+        exit(127)
+      }
+      array.append(dup)
+    }
+    array.append(nil)  // NULL-terminate so execve knows where the array ends.
+    return array
+  }
+
+  let argv = buildCArray(execArgv(command: command))
+  let envp = buildCArray(execEnvironmentBlock(env))
+
+  execve("/usr/bin/env", argv, envp)
+
+  // Only reached if execve failed (e.g. /usr/bin/env missing or unexecutable).
+  let reason = String(cString: strerror(errno))
+  FileHandle.standardError.write(Data("Error: could not run command: \(reason)\n".utf8))
+  exit(127)
 }
 
 // Map "" (and nil) to nil so an empty answer for an optional OAuth field
