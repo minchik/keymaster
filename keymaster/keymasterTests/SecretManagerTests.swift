@@ -422,3 +422,103 @@ struct CrossNamespaceConflictTests {
   }
 
 }
+
+// Tests for `SecretManager.list(reason:)` — the authenticate-then-enumerate listing
+// that backs `secret ls`/`oauth ls`. The security-critical property is the ORDER:
+// authenticate (the single Touch ID / Apple Watch prompt) MUST happen first, because a
+// bare metadata enumeration never decrypts and so would otherwise disclose every stored
+// name with no approval. These assert the sorted output, the namespace scoping, the
+// authenticate-before-list ordering riding one session, the empty store, the
+// no-disclosure-on-auth-failure invariant, and programmed error propagation, all
+// against FakeKeychainBackend.
+struct SecretManagerListTests {
+
+  @Test func listAuthenticatesThenReturnsSortedNames() throws {
+    // Seed in NON-sorted order so the sort is load-bearing (not incidentally satisfied
+    // by insertion order), and assert the calls are `.authenticate` THEN `.listUsing`
+    // — authenticate-first is the gate — with the list riding the one session
+    // `authenticate` returned (sessionUses records that single id).
+    let backend = FakeKeychainBackend(store: [
+      "zebra": Data("1".utf8),
+      "apple": Data("2".utf8),
+      "mango": Data("3".utf8)
+    ])
+    let names = try SecretManager(backend: backend).list(reason: "List stored keychain secrets")
+    #expect(names == ["apple", "mango", "zebra"])
+    #expect(backend.calls == [
+      .authenticate(reason: "List stored keychain secrets"),
+      .listUsing(namespace: .secret)
+    ])
+    // The listing rode the single session `authenticate` handed out (id 1) — no extra
+    // prompt, proving the metadata enumeration runs under the one approval.
+    #expect(backend.sessionUses == [1])
+  }
+
+  @Test func listIsNamespaceScoped() throws {
+    // Seed BOTH stores; each manager lists only its own namespace's names AND records
+    // `.listUsing` for its own namespace — so scoping is load-bearing at the call level,
+    // mirroring `secretManagerGetTargetsItsNamespace`, not just in the result set.
+    let backend = FakeKeychainBackend(store: [
+      .secret: ["plainB": Data("1".utf8), "plainA": Data("2".utf8)],
+      .oauth: ["oauthB": Data("3".utf8), "oauthA": Data("4".utf8)]
+    ])
+    let secretNames = try SecretManager(backend: backend, namespace: .secret)
+      .list(reason: "List stored keychain secrets")
+    #expect(secretNames == ["plainA", "plainB"])
+    #expect(backend.calls == [
+      .authenticate(reason: "List stored keychain secrets"),
+      .listUsing(namespace: .secret)
+    ])
+
+    let oauthBackend = FakeKeychainBackend(store: [
+      .secret: ["plainB": Data("1".utf8), "plainA": Data("2".utf8)],
+      .oauth: ["oauthB": Data("3".utf8), "oauthA": Data("4".utf8)]
+    ])
+    let oauthNames = try SecretManager(backend: oauthBackend, namespace: .oauth)
+      .list(reason: "List stored OAuth records")
+    #expect(oauthNames == ["oauthA", "oauthB"])
+    #expect(oauthBackend.calls == [
+      .authenticate(reason: "List stored OAuth records"),
+      .listUsing(namespace: .oauth)
+    ])
+  }
+
+  @Test func listEmptyStoreReturnsEmptyButStillAuthenticates() throws {
+    // An empty namespace returns [] — but authenticate STILL runs first (the gate is
+    // unconditional), so the command always prompts even when nothing is stored.
+    let backend = FakeKeychainBackend()
+    let names = try SecretManager(backend: backend).list(reason: "List stored keychain secrets")
+    #expect(names == [])
+    #expect(backend.calls == [
+      .authenticate(reason: "List stored keychain secrets"),
+      .listUsing(namespace: .secret)
+    ])
+  }
+
+  @Test func listAuthFailureDisclosesNothing() {
+    // THE security invariant: if the approval is cancelled/fails, `list(reason:)` throws
+    // and `list(using:)` is NEVER called — `calls` is the authenticate alone, so NO name
+    // is enumerated or disclosed without a biometric approval first.
+    let backend = FakeKeychainBackend(store: ["secret": Data("v".utf8)])
+    backend.authenticateError = .status("Authentication failed or was canceled")
+    #expect(throws: KeychainError.status("Authentication failed or was canceled")) {
+      _ = try SecretManager(backend: backend).list(reason: "List stored keychain secrets")
+    }
+    #expect(backend.calls == [.authenticate(reason: "List stored keychain secrets")])
+  }
+
+  @Test func listPropagatesProgrammedListError() {
+    // A transient enumeration failure (after a successful authenticate) propagates out
+    // of `list(reason:)` — the listing is not swallowed into an empty result.
+    let backend = FakeKeychainBackend(store: ["K": Data("v".utf8)])
+    backend.listError = .status("keychain locked")
+    #expect(throws: KeychainError.status("keychain locked")) {
+      _ = try SecretManager(backend: backend).list(reason: "List stored keychain secrets")
+    }
+    #expect(backend.calls == [
+      .authenticate(reason: "List stored keychain secrets"),
+      .listUsing(namespace: .secret)
+    ])
+  }
+
+}

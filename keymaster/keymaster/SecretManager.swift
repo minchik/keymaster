@@ -149,6 +149,17 @@ nonisolated protocol KeychainBackend {
   // separately — a SECOND Touch ID / Apple Watch prompt — which is exactly what the
   // session-aware form avoids. Throws `.status` if the item is absent or the update fails.
   func update(key: String, secret: Data, using session: AuthSession, namespace: KeychainNamespace) throws
+
+  // Enumerate the NAMES of every item in `namespace`, decrypting NONE of them — a
+  // bare metadata listing (no values, no `kSecReturnData`), so the item ACL is never
+  // evaluated and this call does NOT prompt on its own. It rides the caller's single
+  // approval (the session's authenticated context is attached for consistency), but
+  // the actual gate is the `authenticate(reason:)` the caller runs first: a metadata
+  // query alone would disclose every stored name with no prompt, which would break
+  // keymaster's "never disclose whether a name exists without a biometric approval
+  // first" invariant — so `SecretManager.list` authenticates BEFORE calling this.
+  // Returns the names unsorted (the orchestration sorts); `errSecItemNotFound` → `[]`.
+  func list(using session: AuthSession, namespace: KeychainNamespace) throws -> [String]
 }
 
 // The testable orchestration over a `KeychainBackend`. The security-critical
@@ -203,6 +214,20 @@ nonisolated struct SecretManager {
   func remove(key: String) throws {
     _ = try backend.read(key: key, verb: "Remove", namespace: namespace)
     try backend.delete(key: key, namespace: namespace)
+  }
+
+  // List the names of every item in this manager's `namespace`, sorted. Authenticate
+  // FIRST (one Touch ID / Apple Watch prompt via `authenticate(reason:)`), then
+  // enumerate names through that session. Authenticate-first IS the gate: a bare
+  // metadata enumeration never decrypts, so the item ACL is never evaluated and the
+  // listing would otherwise disclose every stored name with no prompt — contradicting
+  // keymaster's "never disclose whether a name exists without a biometric approval
+  // first" invariant. If the approval is cancelled or fails, `authenticate` throws
+  // here and NOTHING is enumerated, so no name is ever disclosed. The result is
+  // `.sorted()` for deterministic, testable output.
+  func list(reason: String) throws -> [String] {
+    let session = try backend.authenticate(reason: reason)
+    return try backend.list(using: session, namespace: namespace).sorted()
   }
 }
 

@@ -28,6 +28,7 @@ enum KeychainCall: Equatable {
   case exists(String, namespace: KeychainNamespace)
   case existsUsing(String, namespace: KeychainNamespace)
   case updateUsing(String, namespace: KeychainNamespace)
+  case listUsing(namespace: KeychainNamespace)
 }
 
 // The opaque batch token handed back by authenticate(). Carries an `id` so a test
@@ -69,6 +70,9 @@ final class FakeKeychainBackend: KeychainBackend {
   // namespace-agnostic dictionary structurally could not express.
   var existsErrors: [String: [KeychainNamespace: KeychainError]] = [:]
   var authenticateError: KeychainError?
+  // When set, `list(using:namespace:)` throws this instead of enumerating — models a
+  // transient enumeration failure so a test can prove `list(reason:)` propagates it.
+  var listError: KeychainError?
 
   // Seed the `.secret` namespace from a plain `[key: Data]`, so the existing
   // plain-secret tests construct the fake exactly as before. `.oauth` entries are
@@ -160,6 +164,19 @@ final class FakeKeychainBackend: KeychainBackend {
     if let error = updateErrors[key] { throw error }
     guard store[namespace]?[key] != nil else { throw KeychainError.status("item not found") }
     store[namespace]?[key] = secret
+  }
+
+  // Session-aware name enumeration: records the call + presented session (so a test can
+  // prove the listing rode the batch's one `authenticate`), throws a programmed
+  // `listError` if set, otherwise returns the namespace's keys UNSORTED — the
+  // orchestration (`SecretManager.list`) is what sorts, so returning unsorted here lets
+  // the sort be asserted load-bearing rather than incidentally satisfied by dictionary
+  // order.
+  func list(using session: AuthSession, namespace: KeychainNamespace) throws -> [String] {
+    calls.append(.listUsing(namespace: namespace))
+    recordSession(session)
+    if let error = listError { throw error }
+    return Array((store[namespace] ?? [:]).keys)
   }
 
   // Note the id of a session-aware call's session, so a test can assert every such

@@ -185,6 +185,49 @@ nonisolated struct SystemKeychain: KeychainBackend {
     let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
     guard status == errSecSuccess else { throw statusError(status) }
   }
+
+  // Enumerate the names of every item in `namespace` WITHOUT decrypting any of them:
+  // kSecReturnAttributes is true but kSecReturnData is false, so the Keychain returns
+  // only metadata and the biometric ACL is never evaluated — this query does NOT
+  // prompt on its own (the gate is the caller's prior `authenticate`). The session's
+  // authenticated context is attached for consistency/defense, mirroring the other
+  // session-aware primitives.
+  //
+  // This builds a FRESH query rather than reusing `baseQuery`, which takes a single
+  // key and folds it into a one-item service string; the list query has no key and
+  // matches every item under the namespace's account. kSecUseDataProtectionKeychain
+  // MUST stay set — without it the query targets the legacy file keychain and silently
+  // returns [] on a real device. Scoping by the per-namespace `account` keeps `.secret`
+  // and `.oauth` disjoint even though their service prefixes overlap; the additional
+  // `servicePrefix` filter is belt-and-suspenders against any foreign item sharing the
+  // access group + account. Each surviving item's `kSecAttrService` has the prefix
+  // stripped to recover the name (so a plain key literally named `oauth.Foo`
+  // round-trips). `errSecItemNotFound` → [].
+  func list(using session: AuthSession, namespace: KeychainNamespace) throws -> [String] {
+    guard let session = session as? LAAuthSession else {
+      throw KeychainError.status("internal error: unexpected authentication session")
+    }
+    let prefix = servicePrefix(for: namespace)
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrAccount as String: account(for: namespace),
+      kSecUseDataProtectionKeychain as String: true,
+      kSecMatchLimit as String: kSecMatchLimitAll,
+      kSecReturnAttributes as String: true,
+      kSecReturnData as String: false,
+      kSecUseAuthenticationContext as String: session.context
+    ]
+    var result: CFTypeRef?
+    let status = SecItemCopyMatching(query as CFDictionary, &result)
+    if status == errSecItemNotFound { return [] }
+    guard status == errSecSuccess else { throw statusError(status) }
+    let items = result as? [[String: Any]] ?? []
+    return items.compactMap { item in
+      guard let service = item[kSecAttrService as String] as? String,
+            service.hasPrefix(prefix) else { return nil }
+      return String(service.dropFirst(prefix.count))
+    }
+  }
 }
 
 // The opaque batch token returned by `authenticate`: a pre-authenticated
