@@ -170,46 +170,11 @@ struct SecretManagerTests {
 }
 
 // Tests for the namespace-aware behavior the seam gained in this task: the
-// no-prompt `exists` probe, the in-place `update` primitive, and the isolation of
-// the `.secret` and `.oauth` stores from one another. These exercise
-// FakeKeychainBackend directly (it is the only KeychainBackend conformer that can
-// run headless) plus SecretManager's threading of its `namespace` through to it.
+// in-place `update` primitive and the isolation of the `.secret` and `.oauth`
+// stores from one another. These exercise FakeKeychainBackend directly (it is the
+// only KeychainBackend conformer that can run headless) plus SecretManager's
+// threading of its `namespace` through to it.
 struct KeychainNamespaceTests {
-
-  // MARK: exists
-
-  @Test func existsReportsPresentAndAbsentWithoutMutating() throws {
-    let backend = FakeKeychainBackend(store: ["K": Data("v".utf8)])
-    #expect(try backend.exists(key: "K", namespace: .secret))
-    #expect(!(try backend.exists(key: "missing", namespace: .secret)))
-    // The probe must not mutate the store — the value is untouched after probing.
-    #expect(backend.storedData("K") == Data("v".utf8))
-    // It records `.exists` calls but never reads/decodes (no `.read`).
-    #expect(backend.calls == [
-      .exists("K", namespace: .secret),
-      .exists("missing", namespace: .secret)
-    ])
-  }
-
-  @Test func existsIsNamespaceScoped() throws {
-    // A name present in `.secret` is NOT reported present in `.oauth`, and vice
-    // versa — the two stores are independent.
-    let backend = FakeKeychainBackend(store: [.secret: ["K": Data("v".utf8)]])
-    #expect(try backend.exists(key: "K", namespace: .secret))
-    #expect(!(try backend.exists(key: "K", namespace: .oauth)))
-  }
-
-  @Test func existsPropagatesProgrammedError() {
-    // Fail-closed contract: a programmed transient error throws rather than reading
-    // as absent. (The real adapter throws on any non-success / non-notFound status.)
-    let backend = FakeKeychainBackend(store: ["K": Data("v".utf8)])
-    backend.existsErrors["K"] = [.secret: .status("keychain locked")]
-    #expect(throws: KeychainError.status("keychain locked")) {
-      _ = try backend.exists(key: "K", namespace: .secret)
-    }
-    // The error path leaves the store unmutated — `exists` is a pure probe.
-    #expect(backend.storedData("K") == Data("v".utf8))
-  }
 
   // MARK: update
 

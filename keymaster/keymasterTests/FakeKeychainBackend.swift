@@ -25,17 +25,15 @@ enum KeychainCall: Equatable {
   case delete(String, namespace: KeychainNamespace)
   case authenticate(reason: String)
   case readUsing(String, namespace: KeychainNamespace)
-  case exists(String, namespace: KeychainNamespace)
-  case existsUsing(String, namespace: KeychainNamespace)
   case updateUsing(String, namespace: KeychainNamespace)
   case listUsing(namespace: KeychainNamespace)
 }
 
 // The opaque batch token handed back by authenticate(). Carries an `id` so a test
-// can prove the session-aware primitives (`readUsing`/`existsUsing`/`updateUsing`)
-// all ran through the SAME session returned by a single `authenticate` — the core
-// "one approval" guarantee. The fake reads straight from its dictionary and does not
-// need a real LAContext.
+// can prove the session-aware primitives (`readUsing`/`updateUsing`) all ran through
+// the SAME session returned by a single `authenticate` — the core "one approval"
+// guarantee. The fake reads straight from its dictionary and does not need a real
+// LAContext.
 struct FakeAuthSession: AuthSession, Equatable {
   let id: Int
 }
@@ -48,8 +46,8 @@ final class FakeKeychainBackend: KeychainBackend {
   // Ordered log of every primitive call, for asserting ordering invariants.
   private(set) var calls: [KeychainCall] = []
   // Ordered log of the session ids presented to the session-aware primitives
-  // (`readUsing`/`existsUsing`/`updateUsing`), so a test can assert classify + read +
-  // rotation-update all rode the SAME session returned by `authenticate`.
+  // (`readUsing`/`updateUsing`), so a test can assert read + rotation-update rode the
+  // SAME session returned by `authenticate`.
   private(set) var sessionUses: [Int] = []
   // Hands out a fresh id to each `authenticate`, so two batches get distinct sessions.
   private var nextSessionID = 0
@@ -63,12 +61,6 @@ final class FakeKeychainBackend: KeychainBackend {
   var deleteErrors: [String: KeychainError] = [:]
   var readUsingErrors: [String: KeychainError] = [:]
   var updateErrors: [String: KeychainError] = [:]
-  // The `exists` probe is the only primitive called per-namespace within a single
-  // operation (the cross-namespace guard and the classifier each probe `.oauth` then
-  // `.secret`), so its programmed failures are keyed by `[key][namespace]` — a test
-  // can fail ONLY the `.secret` probe while the `.oauth` probe passes, which a
-  // namespace-agnostic dictionary structurally could not express.
-  var existsErrors: [String: [KeychainNamespace: KeychainError]] = [:]
   var authenticateError: KeychainError?
   // When set, `list(using:namespace:)` throws this instead of enumerating — models a
   // transient enumeration failure so a test can prove `list(reason:)` propagates it.
@@ -130,28 +122,6 @@ final class FakeKeychainBackend: KeychainBackend {
     if let error = readUsingErrors[key] { throw error }
     guard let data = store[namespace]?[key] else { throw KeychainError.status("item not found") }
     return data
-  }
-
-  // No-prompt presence probe: never mutates, reports whether an item exists under
-  // this key/namespace (mirrors the real `SecItemCopyMatching` with
-  // `kSecReturnData: false`). Fail-closed like the real adapter: when an
-  // `existsErrors` entry is programmed for this (key, namespace), it throws that
-  // error (modelling a transient/undeterminable status) INSTEAD of reporting
-  // presence — so a test can fail one namespace's probe independently of the other.
-  func exists(key: String, namespace: KeychainNamespace) throws -> Bool {
-    calls.append(.exists(key, namespace: namespace))
-    if let error = existsErrors[key]?[namespace] { throw error }
-    return store[namespace]?[key] != nil
-  }
-
-  // Session-aware presence probe: same fail-closed behavior as `exists`, but records
-  // the presented session so a test can prove the classify probe rode the batch's one
-  // `authenticate` (no extra prompt).
-  func exists(key: String, using session: AuthSession, namespace: KeychainNamespace) throws -> Bool {
-    calls.append(.existsUsing(key, namespace: namespace))
-    recordSession(session)
-    if let error = existsErrors[key]?[namespace] { throw error }
-    return store[namespace]?[key] != nil
   }
 
   // Session-aware in-place replace. Like the real `SecItemUpdate`, it fails when the

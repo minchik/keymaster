@@ -108,25 +108,6 @@ nonisolated protocol KeychainBackend {
   // `authenticate` prompt.
   func read(key: String, using session: AuthSession, namespace: KeychainNamespace) throws -> Data
 
-  // Probe for an item's presence WITHOUT decrypting it, so it does NOT trigger
-  // Touch ID. Used to classify a name's namespace (`.secret` vs `.oauth`) before
-  // any prompt. Returns true iff an item exists under `key` in `namespace`, false
-  // only on a definitive "not found"; any other status (e.g. a locked keychain or
-  // `errSecInteractionNotAllowed`) THROWS rather than reading as absent. This
-  // fail-closed behavior is security-relevant: the namespace classifier and the
-  // cross-namespace guard must refuse to act on an unknown state rather than guess
-  // "absent" (which would false-not-found a real item, or let both creators write
-  // the same name into different stores, breaking "one name, one store").
-  func exists(key: String, namespace: KeychainNamespace) throws -> Bool
-
-  // Classify presence THROUGH a pre-authenticated session, so the probe rides the
-  // caller's single approval (no extra prompt) instead of evaluating the item's ACL
-  // on its own. Used by the authenticate-first `get`/`run` resolver to classify a
-  // name's namespace AFTER the one Touch ID prompt. Same fail-closed contract as
-  // `exists(key:namespace:)`: `false` only on a definitive "not found", THROWS on any
-  // other status so a transient error never reads as "absent".
-  func exists(key: String, using session: AuthSession, namespace: KeychainNamespace) throws -> Bool
-
   // Replace an item's data in place THROUGH a pre-authenticated session, so the write
   // rides the caller's single approval (atomic, no extra prompt). Lets the rotation
   // write-back persist a new refresh token under the same prompt that authorized the

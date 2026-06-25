@@ -114,57 +114,6 @@ nonisolated struct SystemKeychain: KeychainBackend {
     return try bytes(status: status, data: data)
   }
 
-  // Probe for an item WITHOUT requesting its data: kSecReturnData is false, so the
-  // Keychain never decrypts and the biometric ACL is never evaluated — no Touch ID.
-  // Used to classify a name's namespace before any prompt.
-  //
-  // Fail-closed: only `errSecSuccess` (present) and `errSecItemNotFound` (truly
-  // absent) are conclusive. Any other status — a locked keychain,
-  // `errSecInteractionNotAllowed`, etc. — means the presence could NOT be determined,
-  // so it throws rather than guessing "absent". Reading "absent" on a transient error
-  // would both false-not-found a real item AND let the cross-namespace guard skip its
-  // refusal, allowing the same name in both stores; throwing makes callers refuse to
-  // act on an unknown state.
-  func exists(key: String, namespace: KeychainNamespace) throws -> Bool {
-    var query = baseQuery(for: key, namespace: namespace)
-    query[kSecMatchLimit as String] = kSecMatchLimitOne
-    query[kSecReturnData as String] = false
-    let status = SecItemCopyMatching(query as CFDictionary, nil)
-    switch status {
-    case errSecSuccess:
-      return true
-    case errSecItemNotFound:
-      return false
-    default:
-      throw statusError(status)
-    }
-  }
-
-  // Probe presence THROUGH a pre-authenticated session, riding the caller's single
-  // approval. kSecReturnData is false (no decrypt), and the session's authenticated
-  // context is attached via kSecUseAuthenticationContext, so this classify probe runs
-  // under the one Touch ID prompt the caller already obtained. Same fail-closed
-  // contract as the context-less `exists`: only `errSecSuccess`/`errSecItemNotFound`
-  // are conclusive; any other status throws rather than guessing "absent".
-  func exists(key: String, using session: AuthSession, namespace: KeychainNamespace) throws -> Bool {
-    guard let session = session as? LAAuthSession else {
-      throw KeychainError.status("internal error: unexpected authentication session")
-    }
-    var query = baseQuery(for: key, namespace: namespace)
-    query[kSecMatchLimit as String] = kSecMatchLimitOne
-    query[kSecReturnData as String] = false
-    query[kSecUseAuthenticationContext as String] = session.context
-    let status = SecItemCopyMatching(query as CFDictionary, nil)
-    switch status {
-    case errSecSuccess:
-      return true
-    case errSecItemNotFound:
-      return false
-    default:
-      throw statusError(status)
-    }
-  }
-
   // Replace an item's stored bytes in place via SecItemUpdate, THROUGH a
   // pre-authenticated session. This rewrites only kSecValueData, leaving the access
   // control intact, and does NOT decrypt the existing value. It still touches a
