@@ -33,17 +33,19 @@ nonisolated struct MintResult: Equatable {
 // the `TokenExchanger` seam. Every OAuth store access targets the `.oauth`
 // namespace, so an OAuth record can never be confused with a plain secret.
 //
-// SINGLE PROMPT, classify-after-prompt: `get` and `run` funnel through the one
+// SINGLE PROMPT, explicit namespace: `get` and `run` funnel through the one
 // authenticate-first `resolve` core. It calls `authenticate(reason:)` exactly once
 // (the single Touch ID prompt) and then does everything else THROUGH that session —
-// the namespace classify (`exists(using:)`), the record/secret read (`read(using:)`),
-// and the rotation write-back (`update(using:)`) — so all three ride the one
-// approval instead of prompting separately. Classifying AFTER the prompt is the
-// intended security property, not a cost: keymaster never discloses whether a name
-// exists — in either namespace — without a biometric approval, so unauthenticated
-// key-existence probing is impossible. The visible consequence is deliberate and by
-// design: a name in NEITHER store aborts AFTER the prompt (you are asked once, then
-// told "not found, nothing ran") rather than leaking its absence before the prompt.
+// the record/secret read (`read(using:)`) and the rotation write-back
+// (`update(using:)`) — so both ride the one approval instead of prompting separately.
+// The namespace is no longer probed for: each `KeyMapping` carries its
+// `secret.`/`oauth.` namespace (parsed by `parseNamespacedKey` before any prompt), so
+// the resolver switches on `mapping.namespace` — `.secret` is read, `.oauth` is
+// minted. A name absent in its declared namespace surfaces a key-prefixed not-found
+// from the authenticated read/mint (after the single prompt), so the missing-key
+// behavior is unchanged — it just comes from the read rather than a separate
+// classifier, and the name's absence is still never disclosed without a biometric
+// approval first.
 nonisolated struct OAuthManager {
   let backend: KeychainBackend
   let exchanger: TokenExchanger
@@ -51,11 +53,13 @@ nonisolated struct OAuthManager {
   // The shared authenticate-first core for BOTH `get` and `run`: prompt ONCE, then
   // resolve every mapping under that single session — `.secret` keys are read+decoded,
   // `.oauth` keys are minted into a fresh access token (rotation write-back included).
-  // `reason` names every key and (for `run`) the program. Last write wins when two
-  // mappings target the same env name. Any classify/read/mint/decode failure is
-  // re-thrown tagged "<key>: <message>" so the caller aborts before printing/exec
-  // naming the offending key (the underlying messages are un-prefixed, so tagging here
-  // never doubles); a name in neither store throws the same way. The returned
+  // The namespace comes from each mapping (explicit `secret.`/`oauth.` prefix), so there
+  // is no classify step — the resolver switches straight on `mapping.namespace`. `reason`
+  // names every key and (for `run`) the program. Last write wins when two mappings target
+  // the same env name. Any read/mint/decode failure is re-thrown tagged "<key>:
+  // <message>" so the caller aborts before printing/exec naming the offending key (the
+  // underlying messages are un-prefixed, so tagging here never doubles); a name absent in
+  // its declared namespace throws the same way from the read/mint. The returned
   // `staleKeys` lists OAuth keys whose rotated refresh token failed to persist —
   // non-fatal, so the CLI warns and proceeds rather than aborting.
   private func resolve(
@@ -67,7 +71,7 @@ nonisolated struct OAuthManager {
     var staleKeys: [String] = []
     for mapping in mappings {
       do {
-        switch try resolveNamespace(name: mapping.key, using: session) {
+        switch mapping.namespace {
         case .secret:
           let data = try backend.read(key: mapping.key, using: session, namespace: .secret)
           injected[mapping.env] = try decodeEnvValue(data)
@@ -77,8 +81,6 @@ nonisolated struct OAuthManager {
           if result.refreshTokenStale {
             staleKeys.append(mapping.key)
           }
-        case nil:
-          throw KeychainError.status("no secret or OAuth record found in the keychain")
         }
       } catch let error as KeychainError {
         throw KeychainError.status("\(mapping.key): \(error.message)")
@@ -88,9 +90,9 @@ nonisolated struct OAuthManager {
   }
 
   // The `run` wrapper: resolve a batch of `--key` mappings into an [env: value]
-  // dictionary under the single prompt. Replaces the old pre-classified
-  // `resolveRunEnvironment(classified:)` — classification now happens inside the core
-  // (after the prompt), so the CLI no longer probes namespaces before authenticating.
+  // dictionary under the single prompt. Each mapping already carries its namespace
+  // (parsed from the `secret.`/`oauth.` prefix), so the core reads `.secret` keys and
+  // mints `.oauth` keys with no namespace probing.
   func resolveRunEnvironment(
     mappings: [KeyMapping],
     reason: String
@@ -98,44 +100,26 @@ nonisolated struct OAuthManager {
     try resolve(mappings, reason: reason)
   }
 
-  // The `get` wrapper: resolve a SINGLE name under the single prompt and return its
-  // value (a plain secret as-is, or a freshly-minted access token for an OAuth record).
-  // `refreshTokenStale` is true only when the name was an OAuth record whose rotated
-  // refresh token failed to persist, so the CLI can warn (the access token is still
-  // returned). Errors are key-prefixed ("<name>: <message>") exactly like the `run`
-  // path, so the CLI surfaces them verbatim without re-prefixing.
+  // The `get` wrapper: resolve a SINGLE name in the given `namespace` under the single
+  // prompt and return its value (a plain secret as-is for `.secret`, or a freshly-minted
+  // access token for an `.oauth` record). The namespace is explicit (parsed from the
+  // caller's `secret.`/`oauth.` prefix), so there is no classify step. `refreshTokenStale`
+  // is true only when the name was an OAuth record whose rotated refresh token failed to
+  // persist, so the CLI can warn (the access token is still returned). Errors are
+  // key-prefixed ("<name>: <message>") exactly like the `run` path, so the CLI surfaces
+  // them verbatim without re-prefixing.
   func resolveSecret(
     name: String,
+    namespace: KeychainNamespace,
     reason: String
   ) throws -> (value: String, refreshTokenStale: Bool) {
-    let (env, staleKeys) = try resolve([KeyMapping(env: name, key: name)], reason: reason)
+    let (env, staleKeys) = try resolve(
+      [KeyMapping(env: name, key: name, namespace: namespace)],
+      reason: reason
+    )
     // `resolve` throws unless it injected a value for the one mapping, so `env[name]`
     // is present on success; the `?? ""` only guards an unreachable nil.
     return (env[name] ?? "", staleKeys.contains(name))
-  }
-
-  // Classify a name's store THROUGH the batch's pre-authenticated session, so the
-  // probe rides the single Touch ID approval (no extra prompt) instead of evaluating
-  // the item's ACL on its own. Running the classify under the approval is the
-  // intended guarantee, not just a prompt-saving convenience: existence is never
-  // disclosed without a biometric approval first, so a caller cannot probe whether a
-  // name is stored. `get`/`run` use this to decide whether to mint (`.oauth`) or read
-  // a plain secret (`.secret`) — and abort cleanly (after the one prompt) when the
-  // name is in neither (`nil`).
-  //
-  // Each name should live in exactly ONE store (the two creators guard against
-  // cross-namespace collisions). Should a name defensively exist in both, `.oauth`
-  // wins by probing it first: an OAuth record is the deliberate, richer credential,
-  // so the mint path takes precedence over a stray plain secret of the same name.
-  //
-  // Fail-closed: `exists(using:)` throws when presence could not be determined (a
-  // transient keychain error), and that error propagates here rather than collapsing
-  // to `nil`. The CLI surfaces it key-prefixed, so an undeterminable state aborts
-  // cleanly instead of a misleading "no secret or OAuth record found".
-  func resolveNamespace(name: String, using session: AuthSession) throws -> KeychainNamespace? {
-    if try backend.exists(key: name, using: session, namespace: .oauth) { return .oauth }
-    if try backend.exists(key: name, using: session, namespace: .secret) { return .secret }
-    return nil
   }
 
   // Read an OAuth record through the batch's pre-authenticated session (no extra

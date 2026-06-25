@@ -163,30 +163,46 @@ struct Keymaster: ParsableCommand {
 
 extension Keymaster {
   // Retrieve a secret, OR mint a fresh access token for an OAuth record, under a
-  // SINGLE Touch ID prompt. The resolver authenticates ONCE, then classifies the
-  // name's namespace THROUGH that session (no separate probe prompt): a plain secret
-  // is read and printed as-is; an OAuth record is exchanged for a fresh access token
-  // (printed to stdout, with any rotated-but-unsaved warning on stderr — so
-  // `$(keymaster get X)` stays clean). Classifying under the one approval is the
-  // intended security property: keymaster never reveals whether a name exists without
-  // a biometric approval first. So a name in neither store aborts AFTER the one prompt
-  // with a deliberate, key-prefixed "not found" — the absence is not leaked before the
-  // prompt. The resolver already prefixes its errors with the key, so this surfaces
-  // them verbatim.
+  // SINGLE Touch ID prompt. The namespace is EXPLICIT in the argument: `secret.NAME`
+  // reads the plain secret `NAME`; `oauth.NAME` mints a fresh access token for OAuth
+  // record `NAME` (printed to stdout, with any rotated-but-unsaved warning on stderr —
+  // so `$(keymaster get oauth.X)` stays clean). The `secret.`/`oauth.` prefix is parsed
+  // and validated by `validate()` (via `parseNamespacedKey`) BEFORE any prompt, so a
+  // missing/unknown prefix or empty key is rejected up front. The resolver then
+  // authenticates ONCE and reads/mints in the declared namespace; a name absent there
+  // aborts with a key-prefixed "not found" after the one prompt (so the name's absence
+  // is never leaked before a biometric approval). The de-prefixed bare key is what is
+  // passed to the resolver, so both the prompt text and the error tag name the bare key
+  // (e.g. `Foo`, not `secret.Foo`).
   struct Get: ParsableCommand {
     static let configuration = CommandConfiguration(
       abstract: "Retrieve a secret or mint an OAuth access token, gated by Touch ID or Apple Watch."
     )
 
-    @Argument(help: "The key to retrieve.")
+    @Argument(help: ArgumentHelp(
+      "The namespaced key to retrieve: secret.NAME reads a plain secret, oauth.NAME mints a token.",
+      valueName: "secret.NAME|oauth.NAME"
+    ))
     var key: String
 
+    // The namespace prefix is parsed here so a missing/unknown prefix or empty key is
+    // rejected before any Touch ID prompt (same validate-then-reparse shape as `Run`).
+    func validate() throws {
+      _ = try parseNamespacedKey(key)
+    }
+
     func run() {
+      // validate() already proved the key parses, so this cannot throw.
+      guard let (namespace, name) = try? parseNamespacedKey(key) else { return }
       let keychain = SystemKeychain()
       let oauth = OAuthManager(backend: keychain, exchanger: URLSessionTokenExchanger())
       do {
-        let result = try oauth.resolveSecret(name: key, reason: "Read keychain secret: \"\(key)\"")
-        if result.refreshTokenStale { warnStaleRefreshToken(key) }
+        let result = try oauth.resolveSecret(
+          name: name,
+          namespace: namespace,
+          reason: "Read keychain secret: \"\(name)\""
+        )
+        if result.refreshTokenStale { warnStaleRefreshToken(name) }
         print(result.value)
       } catch let error as KeychainError {
         fail(error.message)
@@ -211,16 +227,16 @@ extension Keymaster {
   }
 
   // Run a command with keychain secrets injected as environment variables, all
-  // unlocked by a SINGLE Touch ID prompt. Each `--key` names a value to inject and
-  // the env var to inject it as (see parseKeyMapping); a plain-secret key is read
-  // as-is, an OAuth-record key is exchanged for a fresh access token. The resolver
-  // authenticates ONCE, then classifies every name's namespace THROUGH that session.
-  // Classifying under the one approval is the intended security property: a name's
-  // existence is never disclosed without a biometric approval first. So a name in
-  // neither store aborts AFTER the one prompt (but still before exec) — it never
-  // launches with a silently-missing secret, and never leaks the name's absence
-  // before the prompt. The trailing command after `--` is exec'd with those vars
-  // merged over the current environment.
+  // unlocked by a SINGLE Touch ID prompt. Each `--key` carries an EXPLICIT namespace
+  // prefix (see parseKeyMapping): a `secret.`-prefixed key is read as-is, an `oauth.`-
+  // prefixed key is exchanged for a fresh access token. The prefix is parsed and
+  // validated up front (`validate()`), so a malformed/missing-prefix `--key` is
+  // rejected before any prompt or exec. The resolver then authenticates ONCE and
+  // reads/mints every name in its declared namespace under that one approval. A name
+  // absent in its namespace aborts AFTER the one prompt (but still before exec) — it
+  // never launches with a silently-missing secret, and the name's absence is never
+  // leaked before a biometric approval. The trailing command after `--` is exec'd with
+  // those vars merged over the current environment.
   struct Run: ParsableCommand {
     static let configuration = CommandConfiguration(
       abstract: "Run a command with keychain secrets injected as env vars (one Touch ID or Apple Watch prompt)."
@@ -229,8 +245,9 @@ extension Keymaster {
     @Option(
       name: .customLong("key"),
       help: ArgumentHelp(
-        "Secret to inject. \"NAME\" sets env NAME from key NAME; \"ENV=key\" sets env ENV from key 'key'. Repeatable.",
-        valueName: "NAME|ENV=key"
+        "Secret to inject. \"secret.NAME\"/\"oauth.NAME\" sets env NAME from that key; "
+          + "\"ENV=secret.key\"/\"ENV=oauth.key\" sets env ENV from key 'key'. Repeatable.",
+        valueName: "secret.NAME|oauth.NAME|ENV=secret.key|ENV=oauth.key"
       )
     )
     var keys: [String]
@@ -265,12 +282,12 @@ extension Keymaster {
       let keychain = SystemKeychain()
       let oauth = OAuthManager(backend: keychain, exchanger: URLSessionTokenExchanger())
       // resolveRunEnvironment authenticates once (the single prompt) and resolves
-      // every mapping THROUGH that session — classifying each name's namespace,
-      // reading+decoding `.secret` keys, and minting `.oauth` keys into a fresh access
-      // token — aborting before exec if any classify/read/mint/decode fails or a name
-      // is in neither store (its error names the offending key). The classify now rides
-      // the single approval, so a missing key aborts after the prompt rather than before
-      // it. Last write wins for a duplicated env name. A key whose rotated refresh token
+      // every mapping THROUGH that session — reading+decoding `.secret` keys and minting
+      // `.oauth` keys into a fresh access token, each in the mapping's explicit namespace
+      // — aborting before exec if any read/mint/decode fails or a name is absent in its
+      // declared namespace (its error names the offending key). The read/mint rides the
+      // single approval, so a missing key aborts after the prompt rather than before it.
+      // Last write wins for a duplicated env name. A key whose rotated refresh token
       // failed to persist is reported in staleKeys (non-fatal): warn on stderr and
       // proceed with the still-valid token.
       let injected: [String: String]

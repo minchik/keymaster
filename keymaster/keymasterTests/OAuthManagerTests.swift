@@ -3,17 +3,18 @@
 //  keymasterTests
 //
 //  Unit tests for the OAuthManager mint orchestration in OAuthManager.swift. These
-//  exercise the security-critical ordering (classify → read the record → exchange →
-//  conditional rotation write-back → return) against FakeKeychainBackend (records the
-//  ordered primitive calls, programmable per-key errors) and FakeTokenExchanger
-//  (programmed response or thrown error, records the record it received).
+//  exercise the security-critical ordering (read the record → exchange → conditional
+//  rotation write-back → return) against FakeKeychainBackend (records the ordered
+//  primitive calls, programmable per-key errors) and FakeTokenExchanger (programmed
+//  response or thrown error, records the record it received).
 //
 //  The `get` path is exercised through the authenticate-first `resolveSecret` wrapper,
-//  so every test asserts the UNIFIED single-prompt sequence: one `authenticate`, then
-//  classify (`existsUsing`) + read (`readUsing`) + (on rotation) write-back
-//  (`updateUsing`) ALL through that one session — never a bare `read(verb:)` or a
-//  context-less `update`. The `run`-style read-through-session is covered directly via
-//  `mint(name:using:)`. Both must target the `.oauth` namespace for OAuth records.
+//  which now takes an EXPLICIT `namespace:` (no classify probe), so every test asserts
+//  the UNIFIED single-prompt sequence: one `authenticate`, then read (`readUsing`) +
+//  (on rotation) write-back (`updateUsing`) ALL through that one session — never a bare
+//  `read(verb:)` or a context-less `update`. The `run`-style read-through-session is
+//  covered directly via `mint(name:using:)`. OAuth records target the `.oauth`
+//  namespace; a `.secret` name is read straight from the plain store.
 //
 //  Like the other test sources, OAuthManager.swift is compiled directly into this
 //  host-less bundle via a synchronized-group membership exception, so a plain
@@ -47,23 +48,22 @@ struct OAuthManagerTests {
 
   // MARK: get path — ordering + rotation write-back (one prompt, all through it)
 
-  @Test func getRotatingRecordAuthenticatesOnceThenClassifyReadUpdate() throws {
+  @Test func getRotatingRecordAuthenticatesOnceThenReadUpdate() throws {
     // THE single-prompt invariant for a rotating OAuth record: ONE authenticate, then
-    // classify (`.oauth` hits, short-circuiting `.secret`), read, and the rotation
-    // write-back — all through that session, all in `.oauth`. The returned value is the
+    // the read and the rotation write-back — both through that session, both in
+    // `.oauth` (no classify probe; the namespace is explicit). The returned value is the
     // minted access token and the stale flag is false (the write-back succeeded).
     let backend = try Self.seededBackend()
     let exchanger = FakeTokenExchanger(response: TokenResponse(
       accessToken: "at-123", refreshToken: "rotated-refresh"
     ))
     let result = try OAuthManager(backend: backend, exchanger: exchanger)
-      .resolveSecret(name: "rec", reason: Self.getReason)
+      .resolveSecret(name: "rec", namespace: .oauth, reason: Self.getReason)
 
     #expect(result.value == "at-123")
     #expect(result.refreshTokenStale == false)
     #expect(backend.calls == [
       .authenticate(reason: Self.getReason),
-      .existsUsing("rec", namespace: .oauth),
       .readUsing("rec", namespace: .oauth),
       .updateUsing("rec", namespace: .oauth)
     ])
@@ -71,21 +71,21 @@ struct OAuthManagerTests {
     #expect(exchanger.receivedRecord == Self.record)
   }
 
-  @Test func getRotationCarriesTheSameSessionThroughClassifyReadUpdate() throws {
-    // The core "one approval" guarantee for `get`: the classify probe, the read, and
-    // the rotation write-back all rode the SAME session id returned by the single
-    // `authenticate` — no operation fell back to a self-authenticating call.
+  @Test func getRotationCarriesTheSameSessionThroughReadUpdate() throws {
+    // The core "one approval" guarantee for `get`: the read and the rotation write-back
+    // both rode the SAME session id returned by the single `authenticate` — no operation
+    // fell back to a self-authenticating call.
     let backend = try Self.seededBackend()
     let exchanger = FakeTokenExchanger(response: TokenResponse(
       accessToken: "at", refreshToken: "rotated-refresh"
     ))
     _ = try OAuthManager(backend: backend, exchanger: exchanger)
-      .resolveSecret(name: "rec", reason: Self.getReason)
+      .resolveSecret(name: "rec", namespace: .oauth, reason: Self.getReason)
 
-    // existsUsing + readUsing + updateUsing each recorded a session; all three match,
-    // and all three are session id 1 — the FIRST (and only) session the single
-    // `authenticate` handed out — proving none self-authenticated a fresh session.
-    #expect(backend.sessionUses.count == 3)
+    // readUsing + updateUsing each recorded a session; both match, and both are session
+    // id 1 — the FIRST (and only) session the single `authenticate` handed out —
+    // proving neither self-authenticated a fresh session.
+    #expect(backend.sessionUses.count == 2)
     #expect(backend.sessionUses.allSatisfy { $0 == 1 })
   }
 
@@ -98,7 +98,7 @@ struct OAuthManagerTests {
       accessToken: "at", refreshToken: "rotated-refresh"
     ))
     _ = try OAuthManager(backend: backend, exchanger: exchanger)
-      .resolveSecret(name: "rec", reason: Self.getReason)
+      .resolveSecret(name: "rec", namespace: .oauth, reason: Self.getReason)
 
     let storedOauth = backend.storedData("rec", namespace: .oauth)
     let persisted = try JSONDecoder().decode(OAuthRecord.self, from: #require(storedOauth))
@@ -132,13 +132,12 @@ struct OAuthManagerTests {
       accessToken: "at", refreshToken: "rotated-refresh"
     ))
     let result = try OAuthManager(backend: backend, exchanger: exchanger)
-      .resolveSecret(name: "rec", reason: Self.getReason)
+      .resolveSecret(name: "rec", namespace: .oauth, reason: Self.getReason)
 
     #expect(result.value == "at")
     #expect(result.refreshTokenStale == false)
     #expect(backend.calls == [
       .authenticate(reason: Self.getReason),
-      .existsUsing("rec", namespace: .oauth),
       .readUsing("rec", namespace: .oauth),
       .updateUsing("rec", namespace: .oauth)
     ])
@@ -163,19 +162,18 @@ struct OAuthManagerTests {
 
   @Test func getDoesNotUpdateWhenRefreshTokenAbsent() throws {
     // No `refresh_token` in the reply → nothing to rotate → no `updateUsing` call, but
-    // still exactly one authenticate + classify + read.
+    // still exactly one authenticate + read.
     let backend = try Self.seededBackend()
     let exchanger = FakeTokenExchanger(response: TokenResponse(
       accessToken: "at", refreshToken: nil
     ))
     let result = try OAuthManager(backend: backend, exchanger: exchanger)
-      .resolveSecret(name: "rec", reason: Self.getReason)
+      .resolveSecret(name: "rec", namespace: .oauth, reason: Self.getReason)
 
     #expect(result.value == "at")
     #expect(result.refreshTokenStale == false)
     #expect(backend.calls == [
       .authenticate(reason: Self.getReason),
-      .existsUsing("rec", namespace: .oauth),
       .readUsing("rec", namespace: .oauth)
     ])
     // The stored record is untouched.
@@ -189,13 +187,12 @@ struct OAuthManagerTests {
       accessToken: "at", refreshToken: "stored-refresh"
     ))
     let result = try OAuthManager(backend: backend, exchanger: exchanger)
-      .resolveSecret(name: "rec", reason: Self.getReason)
+      .resolveSecret(name: "rec", namespace: .oauth, reason: Self.getReason)
 
     #expect(result.value == "at")
     #expect(result.refreshTokenStale == false)
     #expect(backend.calls == [
       .authenticate(reason: Self.getReason),
-      .existsUsing("rec", namespace: .oauth),
       .readUsing("rec", namespace: .oauth)
     ])
   }
@@ -212,13 +209,12 @@ struct OAuthManagerTests {
       accessToken: "at", refreshToken: ""
     ))
     let result = try OAuthManager(backend: backend, exchanger: exchanger)
-      .resolveSecret(name: "rec", reason: Self.getReason)
+      .resolveSecret(name: "rec", namespace: .oauth, reason: Self.getReason)
 
     #expect(result.value == "at")
     #expect(result.refreshTokenStale == false)
     #expect(backend.calls == [
       .authenticate(reason: Self.getReason),
-      .existsUsing("rec", namespace: .oauth),
       .readUsing("rec", namespace: .oauth)
     ])
     // The stored record keeps its ORIGINAL refresh token — the empty one was discarded.
@@ -239,13 +235,12 @@ struct OAuthManagerTests {
       accessToken: "at-still-good", refreshToken: "rotated" + nul + "refresh"
     ))
     let result = try OAuthManager(backend: backend, exchanger: exchanger)
-      .resolveSecret(name: "rec", reason: Self.getReason)
+      .resolveSecret(name: "rec", namespace: .oauth, reason: Self.getReason)
 
     #expect(result.value == "at-still-good")
     #expect(result.refreshTokenStale == true)
     #expect(backend.calls == [
       .authenticate(reason: Self.getReason),
-      .existsUsing("rec", namespace: .oauth),
       .readUsing("rec", namespace: .oauth)
     ])
     // The stored record keeps its ORIGINAL refresh token — the NUL-bearing one was discarded.
@@ -264,13 +259,12 @@ struct OAuthManagerTests {
       accessToken: "at-still-good", refreshToken: "rotated-refresh"
     ))
     let result = try OAuthManager(backend: backend, exchanger: exchanger)
-      .resolveSecret(name: "rec", reason: Self.getReason)
+      .resolveSecret(name: "rec", namespace: .oauth, reason: Self.getReason)
 
     #expect(result.value == "at-still-good")
     #expect(result.refreshTokenStale == true)
     #expect(backend.calls == [
       .authenticate(reason: Self.getReason),
-      .existsUsing("rec", namespace: .oauth),
       .readUsing("rec", namespace: .oauth),
       .updateUsing("rec", namespace: .oauth)
     ])
@@ -282,17 +276,16 @@ struct OAuthManagerTests {
 
   @Test func getMalformedRecordThrowsKeyPrefixedError() throws {
     // Bytes that are not a valid OAuth record JSON → a clear, key-prefixed error BEFORE
-    // any exchange. The classify + read happened (under one prompt) but no write-back.
+    // any exchange. The read happened (under one prompt) but no write-back.
     let backend = FakeKeychainBackend(store: [.oauth: ["rec": Data("not json".utf8)]])
     let exchanger = FakeTokenExchanger()
     #expect(throws: KeychainError.status("rec: stored OAuth record is not valid JSON")) {
       _ = try OAuthManager(backend: backend, exchanger: exchanger)
-        .resolveSecret(name: "rec", reason: Self.getReason)
+        .resolveSecret(name: "rec", namespace: .oauth, reason: Self.getReason)
     }
     #expect(exchanger.receivedRecord == nil)
     #expect(backend.calls == [
       .authenticate(reason: Self.getReason),
-      .existsUsing("rec", namespace: .oauth),
       .readUsing("rec", namespace: .oauth)
     ])
   }
@@ -307,7 +300,7 @@ struct OAuthManagerTests {
     let exchanger = FakeTokenExchanger()
     #expect(throws: KeychainError.status("rec: stored OAuth record is not valid JSON")) {
       _ = try OAuthManager(backend: backend, exchanger: exchanger)
-        .resolveSecret(name: "rec", reason: Self.getReason)
+        .resolveSecret(name: "rec", namespace: .oauth, reason: Self.getReason)
     }
     #expect(exchanger.receivedRecord == nil)
   }
@@ -328,12 +321,11 @@ struct OAuthManagerTests {
     let exchanger = FakeTokenExchanger()
     #expect(throws: KeychainError.status("rec: token_endpoint must be an https URL")) {
       _ = try OAuthManager(backend: backend, exchanger: exchanger)
-        .resolveSecret(name: "rec", reason: Self.getReason)
+        .resolveSecret(name: "rec", namespace: .oauth, reason: Self.getReason)
     }
     #expect(exchanger.receivedRecord == nil)
     #expect(backend.calls == [
       .authenticate(reason: Self.getReason),
-      .existsUsing("rec", namespace: .oauth),
       .readUsing("rec", namespace: .oauth)
     ])
   }
@@ -350,12 +342,11 @@ struct OAuthManagerTests {
       "rec: refresh token expired or revoked; re-run oauth set"
     )) {
       _ = try OAuthManager(backend: backend, exchanger: exchanger)
-        .resolveSecret(name: "rec", reason: Self.getReason)
+        .resolveSecret(name: "rec", namespace: .oauth, reason: Self.getReason)
     }
     #expect(exchanger.receivedRecord == Self.record)
     #expect(backend.calls == [
       .authenticate(reason: Self.getReason),
-      .existsUsing("rec", namespace: .oauth),
       .readUsing("rec", namespace: .oauth)
     ])
   }
@@ -369,52 +360,49 @@ struct OAuthManagerTests {
     let exchanger = FakeTokenExchanger()
     #expect(throws: KeychainError.status("rec: item not found")) {
       _ = try OAuthManager(backend: backend, exchanger: exchanger)
-        .resolveSecret(name: "rec", reason: Self.getReason)
+        .resolveSecret(name: "rec", namespace: .oauth, reason: Self.getReason)
     }
     #expect(exchanger.receivedRecord == nil)
     #expect(backend.calls == [
       .authenticate(reason: Self.getReason),
-      .existsUsing("rec", namespace: .oauth),
       .readUsing("rec", namespace: .oauth)
     ])
   }
 
-  // MARK: get path — plain secret resolves and decodes under one prompt
+  // MARK: get path — plain secret reads and decodes under one prompt
 
-  @Test func getPlainSecretClassifiesThenReadsAndDecodes() throws {
-    // A name present only in `.secret` is classified by probing `.oauth` (miss) then
-    // `.secret` (hit), read through the same session, and its decoded value returned —
-    // all under the one authenticate, with no minting and no write-back.
+  @Test func getPlainSecretReadsAndDecodes() throws {
+    // A `.secret` name is read straight from the plain store through the one session
+    // (no classify probe) and its decoded value returned — all under the one
+    // authenticate, with no minting and no write-back.
     let backend = FakeKeychainBackend(store: [.secret: ["rec": Data("plainval".utf8)]])
     let exchanger = FakeTokenExchanger()
     let result = try OAuthManager(backend: backend, exchanger: exchanger)
-      .resolveSecret(name: "rec", reason: Self.getReason)
+      .resolveSecret(name: "rec", namespace: .secret, reason: Self.getReason)
 
     #expect(result.value == "plainval")
     #expect(result.refreshTokenStale == false)
     #expect(backend.calls == [
       .authenticate(reason: Self.getReason),
-      .existsUsing("rec", namespace: .oauth),
-      .existsUsing("rec", namespace: .secret),
       .readUsing("rec", namespace: .secret)
     ])
     #expect(exchanger.receivedRecord == nil)
   }
 
-  @Test func getNameInNeitherStoreAbortsAfterPromptKeyPrefixed() throws {
-    // The accepted trade-off of classifying AFTER the prompt: a name in neither store
-    // authenticates ONCE, probes both namespaces (miss), then aborts with a
-    // key-prefixed "not found" — nothing is read or minted.
+  @Test func getOauthNameAbsentAbortsAfterPromptKeyPrefixed() throws {
+    // A name absent in its declared namespace authenticates ONCE, then aborts at the
+    // authenticated read with a key-prefixed "not found" (the fake's read text) — the
+    // missing-key behavior now comes from the read rather than a separate classifier,
+    // and the absence is still never disclosed before the single prompt.
     let backend = FakeKeychainBackend()
     let exchanger = FakeTokenExchanger()
-    #expect(throws: KeychainError.status("rec: no secret or OAuth record found in the keychain")) {
+    #expect(throws: KeychainError.status("rec: item not found")) {
       _ = try OAuthManager(backend: backend, exchanger: exchanger)
-        .resolveSecret(name: "rec", reason: Self.getReason)
+        .resolveSecret(name: "rec", namespace: .oauth, reason: Self.getReason)
     }
     #expect(backend.calls == [
       .authenticate(reason: Self.getReason),
-      .existsUsing("rec", namespace: .oauth),
-      .existsUsing("rec", namespace: .secret)
+      .readUsing("rec", namespace: .oauth)
     ])
   }
 
