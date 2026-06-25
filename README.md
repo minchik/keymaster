@@ -92,17 +92,17 @@ Piped input is read in full, so multi-line secrets (e.g. PEM keys) are preserved
 
 Creating a brand-new key does **not** prompt for Touch ID (the biometric access control is evaluated on access, not on creation). Overwriting an existing key **does** prompt and names the key.
 
-If the name already holds an [OAuth record](#oauth-refresh-token-records), `secret set` **refuses** and writes nothing — a name lives in exactly one store (see [OAuth refresh-token records](#oauth-refresh-token-records) below). Remove the OAuth record first with `keymaster oauth rm MyKeyName`, then re-run `keymaster secret set`.
+A name may live in **both** namespaces at once: if it already holds an [OAuth record](#oauth-refresh-token-records), `secret set` stores the plain secret alongside it (the two are independent keychain items). Retrieval is then by explicit prefix — `keymaster get secret.MyKeyName` reads this plain secret, `keymaster get oauth.MyKeyName` mints from the record (see [OAuth refresh-token records](#oauth-refresh-token-records) below).
 
 ## Retrieve a secret
 
-`keymaster get MyKeyName`
+`keymaster get secret.MyKeyName`
 
-A Touch ID prompt (which a paired Apple Watch can also approve, via a side-button double-click) appears that **names the requested key** (e.g. `Read keychain secret: "MyKeyName"`), so a script asking for the wrong secret is visible at approval time. On a match, the secret is printed to stdout. Cancelling the prompt denies access, prints nothing, and exits non-zero.
+Top-level `get` takes a key with an **explicit namespace prefix**: `secret.NAME` reads a plain secret, `oauth.NAME` mints a fresh access token from an [OAuth record](#oauth-refresh-token-records) (printing **only** that token — see below). The prefix is required and is parsed before any prompt, so `get MyKeyName` with no prefix (and `get bogus.MyKeyName` / `get secret.`) is rejected up front, before any Touch ID challenge.
 
-Top-level `get` is the one **namespace-independent** retrieval command: if the name is an [OAuth record](#oauth-refresh-token-records) rather than a plain secret, `get` instead mints a fresh access token from it and prints **only** that token — see below. The namespace is classified through that same single approval — by design, so keymaster never discloses whether a name exists without a Touch ID approval first. A name in neither store therefore fails *after* the one prompt, naming the key and doing nothing else; its absence is never leaked before the prompt.
+A Touch ID prompt (which a paired Apple Watch can also approve, via a side-button double-click) then appears that **names the requested key** by its de-prefixed bare name (e.g. `Read keychain secret: "MyKeyName"`), so a script asking for the wrong secret is visible at approval time. On a match, the secret (or minted token) is printed to stdout. Cancelling the prompt denies access, prints nothing, and exits non-zero. A name absent in its declared namespace fails *after* the one prompt, naming the key — keymaster never discloses whether a name exists without a Touch ID approval first, so the absence is not leaked before the prompt.
 
-For a strictly plain-only read, use `keymaster secret get MyKeyName` — the plain-namespace analogue of `keymaster oauth get` (below). It never mints and never consults the OAuth namespace, so a name that is actually an OAuth record returns a plain-namespace "not found".
+Because the namespace is explicit, the same name can live in both stores and you choose which you want: `get secret.MyKeyName` always reads the plain secret, `get oauth.MyKeyName` always mints from the OAuth record. (`keymaster secret get MyKeyName` is also a strictly plain-only read — the plain-namespace analogue of `keymaster oauth get` below — and likewise never mints.)
 
 ## Remove a secret
 
@@ -126,15 +126,16 @@ Listing is gated by a **single Touch ID prompt** (which a paired Apple Watch can
 `keymaster run` injects one or more keychain secrets into a child process as environment variables, unlocking the whole batch with a **single** Touch ID prompt (which a paired Apple Watch can also approve). It's modelled on `op run`:
 
 ```bash
-keymaster run --key API_TOKEN --key DB_PASS=prod-db-password -- ./deploy.sh --flag
+keymaster run --key secret.API_TOKEN --key DB_PASS=secret.prod-db-password -- ./deploy.sh --flag
 ```
 
-Everything after `--` is the command to run. Each `--key` is repeatable and names a secret to inject:
+Everything after `--` is the command to run. Each `--key` is repeatable, carries an **explicit namespace prefix** (`secret.`/`oauth.`), and names a secret to inject:
 
-- `--key NAME` — read keychain key `NAME` and inject it as environment variable `NAME`.
-- `--key ENVNAME=keychainkey` — read keychain key `keychainkey` and inject it as environment variable `ENVNAME`. The split is on the **first** `=` only, so keychain keys may themselves contain `=`.
+- `--key secret.NAME` — read plain key `NAME` and inject it as environment variable `NAME` (the env name is the **de-prefixed** key).
+- `--key oauth.NAME` — mint a fresh access token for OAuth record `NAME` and inject it as environment variable `NAME`.
+- `--key ENVNAME=secret.key` / `--key ENVNAME=oauth.key` — read/mint key `key` from that namespace and inject it as environment variable `ENVNAME`. The split is on the **first** `=` only, so keychain keys may themselves contain `=` (the right side is then parsed for the `secret.`/`oauth.` prefix).
 
-A key may name either a plain secret or an [OAuth record](#oauth-refresh-token-records). Every name is classified (plain vs OAuth) *through* the single Touch ID approval itself — the probe rides that one prompt. This is the intended security guarantee, not just a prompt-saving trick: keymaster never discloses whether a name exists without a biometric approval first, so a name in neither store aborts the batch *after* the prompt, naming the key, rather than leaking its absence beforehand; an OAuth key is minted into a fresh access token under that same one prompt.
+The prefix is parsed and validated up front, so a `--key` with no/unknown namespace prefix is rejected **before** any prompt or exec. The resolver authenticates once and, switching on each mapping's namespace, reads `.secret` keys and mints `.oauth` keys under that one approval. A name absent in its declared namespace aborts the batch *after* the prompt, naming the key — keymaster never discloses whether a name exists without a biometric approval first, so the absence is not leaked beforehand.
 
 The injected variables are merged over the current environment (a `--key` that names an existing env var overrides it; a duplicated env name keeps the last one). keymaster then **replaces itself** with the command via `execve` (through `/usr/bin/env`, so a bare program name like `node` is resolved against `PATH`): the command inherits keymaster's PID, its already-foreground process group, and the real controlling terminal on stdin/stdout/stderr. Because the command *becomes* the foreground terminal process — rather than being spawned as a background child — interactive terminal programs (e.g. `vim`, `less`, a REPL) work normally and receive keyboard input.
 
@@ -150,9 +151,9 @@ A handy pattern is a small wrapper script that runs a tool with its secrets inje
 #!/bin/sh
 
 keymaster run \
-  --key TASKWARRIOR_SYNC_URL \
-  --key TASKWARRIOR_CLIENT_ID \
-  --key TASKWARRIOR_ENCRYPTION_SECRET \
+  --key secret.TASKWARRIOR_SYNC_URL \
+  --key secret.TASKWARRIOR_CLIENT_ID \
+  --key secret.TASKWARRIOR_ENCRYPTION_SECRET \
   -- task sync
 ```
 
@@ -173,16 +174,16 @@ printf '%s' '{"token_endpoint":"https://example.com/token","client_id":"abc","re
 
 A record has three required fields — `token_endpoint` (must be `https`), `client_id`, and `refresh_token` — plus optional `client_secret` (omit it for a public client) and `scopes`. Creating a record does **not** prompt for Touch ID; overwriting one does.
 
-If the name already holds a plain secret, `oauth set` **refuses** and writes nothing — a name lives in exactly one store (see **One name, one store** below). Remove the plain secret first with `keymaster secret rm GitHub`, then re-run `oauth set`.
+A name may live in **both** namespaces at once: if it already holds a plain secret, `oauth set` stores the record alongside it (the two are independent keychain items). Retrieval is then by explicit prefix — `keymaster get oauth.GitHub` mints from this record, `keymaster get secret.GitHub` reads the plain secret (see **A name can live in both stores** below).
 
 Mint an access token from a stored record:
 
 ```bash
-keymaster get GitHub                           # Touch ID → prints ONLY the access token to stdout
-keymaster run --key TOKEN=GitHub -- ./deploy   # injects a freshly-minted TOKEN under one prompt
+keymaster get oauth.GitHub                          # Touch ID → prints ONLY the access token to stdout
+keymaster run --key TOKEN=oauth.GitHub -- ./deploy  # injects a freshly-minted TOKEN under one prompt
 ```
 
-`keymaster get <name>` unlocks the record with one Touch ID prompt (or Apple Watch approval), exchanges the refresh token, and prints **only** the access token to stdout — so `$(keymaster get GitHub)` captures a clean token — while any warning goes to stderr. `keymaster run` treats an OAuth key like a plain one: it is classified through the single prompt and minted into a fresh access token under it. Keymaster never caches a token; it mints a fresh one each time.
+`keymaster get oauth.<name>` unlocks the record with one Touch ID prompt (or Apple Watch approval), exchanges the refresh token, and prints **only** the access token to stdout — so `$(keymaster get oauth.GitHub)` captures a clean token — while any warning goes to stderr. `keymaster run --key …=oauth.<name>` mints the same way under its single batch prompt. Keymaster never caches a token; it mints a fresh one each time.
 
 Inspect, list, or delete records (all gated by Touch ID or Apple Watch):
 
@@ -198,13 +199,13 @@ See [List stored names](#list-stored-names) for how `oauth ls` is gated.
 
 **Rotation.** If the provider returns a new `refresh_token` (token rotation), keymaster updates the stored record in place, atomically, with no extra prompt, preserving any extra keys the stored JSON happened to carry (the write-back edits the `refresh_token` field in the stored object rather than rewriting it from scratch). If that write-back ever fails, the access token it just minted is still used and a warning is printed to **stderr** telling you to re-run `keymaster oauth set` — it does not abort. An expired or revoked refresh token surfaces a clear `invalid_grant` → "re-run oauth set" message.
 
-**One name, one store.** A name is either a plain secret or an OAuth record, never both. If you `secret set` a plain secret over an existing OAuth record (or `oauth set` over an existing plain secret), keymaster **refuses** and writes nothing — the existing item is left untouched. A no-prompt `exists` probe of the other namespace runs before any write, so the refusal costs no Touch ID prompt and names the exact `secret rm`/`oauth rm` command to remove the old item. The probe is fail-closed: if the keychain can't determine presence (a transient error), the write refuses rather than silently skipping the cross-namespace check. To replace the credential, remove the old item first (`keymaster oauth rm <name>` or `keymaster secret rm <name>`), then create the new one.
+**A name can live in both stores.** The plain and OAuth namespaces are independent, so the same name may name a plain secret *and* an OAuth record at the same time (they are two separate keychain items). `secret set` and `oauth set` are plain upserts — neither consults the other namespace, so creating a cross-namespace duplicate just works, with no refusal and no extra prompt. Retrieval is unambiguous because it is **explicit**: `keymaster get secret.<name>` (and `run --key secret.<name>`) always reads the plain secret, `keymaster get oauth.<name>` (and `run --key …=oauth.<name>`) always mints from the OAuth record. There is no auto-classification and no tie-break — you say which store you mean in the prefix.
 
 ## Storage details
 
 - **Keychain:** the modern data-protection keychain (`kSecUseDataProtectionKeychain`).
 - **Item:** service `dev.mnck.<key>`, account `keymaster`, access group `<TeamID>.dev.mnck.keymaster`.
-- **OAuth records:** the same keychain, access group, accessibility, and access control, but under a separate service prefix `dev.mnck.oauth.<name>` **and** a distinct account `keymaster.oauth`, holding the whole credential as JSON (written canonically at `oauth set` time; a rotation write-back stays decode-equivalent but not byte-canonical). (The distinct account keeps the prefix-overlapping namespaces from ever aliasing — a plain key `oauth.<name>` would otherwise share the OAuth record `<name>`'s service string.)
+- **OAuth records:** the same keychain, access group, accessibility, and access control, but under a separate service prefix `dev.mnck.oauth.<name>` **and** a distinct account `keymaster.oauth`, holding the whole credential as JSON (written canonically at `oauth set` time; a rotation write-back stays decode-equivalent but not byte-canonical). The distinct account makes the two stores **independent keychain items** for all key text — even a plain key literally named `oauth.<name>` (whose service string would otherwise collide with OAuth record `<name>`) stays separate — so a plain secret and an OAuth record can share the same name and coexist; `get`/`run` pick between them by the explicit `secret.`/`oauth.` prefix.
 - **Accessibility:** `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly` — items never sync to iCloud and never appear in backups, and they are **destroyed if you remove your device passcode**.
 - **`[.biometryAny, .or, .companion]`:** Touch ID (any currently-enrolled fingerprint/face) **or** a paired Apple Watch (side-button double-click) can satisfy the prompt; the item is *not* invalidated if you later add or remove an enrolled biometric. There is **no passcode fallback** (`.userPresence`/`.devicePasscode` are deliberately unused).
 
