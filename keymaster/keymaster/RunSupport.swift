@@ -17,19 +17,14 @@
 import Foundation
 
 // A resolved `--key` argument: read keychain key `key` from namespace `namespace`,
-// inject it as env var `env`.
+// inject it as env var `env`. The namespace is always supplied explicitly (by
+// `parseKeyMapping` / `OAuthManager.resolveSecret`), so the synthesized memberwise
+// `init(env:key:namespace:)` is used as-is — there is deliberately no default,
+// making a missing namespace a compile error rather than a silent `.secret`.
 struct KeyMapping: Equatable {
   let env: String
   let key: String
   let namespace: KeychainNamespace
-
-  // `namespace` defaults to `.secret` only so a caller may omit it; every real caller
-  // (`parseKeyMapping` / `OAuthManager.resolveSecret`) supplies it explicitly.
-  init(env: String, key: String, namespace: KeychainNamespace = .secret) {
-    self.env = env
-    self.key = key
-    self.namespace = namespace
-  }
 }
 
 // Raised when a `secret.NAME`/`oauth.NAME` key is malformed, so it is rejected

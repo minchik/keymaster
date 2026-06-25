@@ -227,6 +227,46 @@ struct OAuthRunResolverTests {
       reason: "reason"
     )
     #expect(result.env == ["DUP": "minted-at"])
+    // Both mappings were resolved (the losing `.secret` read still happened); the
+    // dictionary's last assignment — not a short-circuit — is what dropped the loser.
+    #expect(backend.calls == [
+      .authenticate(reason: "reason"),
+      .readUsing("plain", namespace: .secret),
+      .readUsing("oauthkey", namespace: .oauth)
+    ])
+  }
+
+  // MARK: resolveRunEnvironment — same name in both namespaces (the duplicate-keys payoff)
+
+  @Test func resolveRunEnvironmentSameNameInBothNamespacesResolvesByNamespaceNotName() throws {
+    // The headline payoff of cross-namespace duplicates: a plain secret AND an OAuth
+    // record share the name "Dup", and one batch resolves BOTH — the `.secret` mapping
+    // reads the plain value, the `.oauth` mapping mints from the record, into DISTINCT
+    // env vars. This proves the switch keys off `mapping.namespace`, not the bare name:
+    // a regression aliasing the second mapping to the first would yield equal values.
+    let backend = FakeKeychainBackend(store: [
+      .secret: ["Dup": Data("plainval".utf8)],
+      .oauth: ["Dup": try Self.record.encoded()]
+    ])
+    let exchanger = FakeTokenExchanger(response: TokenResponse(
+      accessToken: "minted-at", refreshToken: nil
+    ))
+    let manager = OAuthManager(backend: backend, exchanger: exchanger)
+    let result = try manager.resolveRunEnvironment(
+      mappings: [
+        KeyMapping(env: "PLAIN", key: "Dup", namespace: .secret),
+        KeyMapping(env: "TOKEN", key: "Dup", namespace: .oauth)
+      ],
+      reason: "reason"
+    )
+    #expect(result.env == ["PLAIN": "plainval", "TOKEN": "minted-at"])
+    #expect(result.staleKeys == [])
+    // The same name routed to two different stores under the one prompt.
+    #expect(backend.calls == [
+      .authenticate(reason: "reason"),
+      .readUsing("Dup", namespace: .secret),
+      .readUsing("Dup", namespace: .oauth)
+    ])
   }
 
   // MARK: resolveRunEnvironment — stale refresh token surfaced

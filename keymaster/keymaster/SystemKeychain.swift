@@ -26,8 +26,8 @@ import Security
 // `oauth.GitHub` computes the SAME `kSecAttrService` (`dev.mnck.oauth.GitHub`) as
 // OAuth record `GitHub`, so without a discriminator they would be one keychain
 // item. Since the (service, account) pair is the primary key, a per-namespace
-// account keeps them separate for ALL key text, preserving the "each name lives in
-// exactly one store" invariant.
+// account keeps them separate for ALL key text, so a plain secret and an OAuth
+// record may share the same name and coexist as two independent keychain items.
 private nonisolated func account(for namespace: KeychainNamespace) -> String {
   switch namespace {
   case .secret:

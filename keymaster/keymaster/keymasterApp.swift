@@ -5,7 +5,8 @@
 // rejects on an unsigned/unprovisioned binary). At runtime it behaves as a
 // CLI: `Keymaster.app/Contents/MacOS/keymaster <command> <key>` (e.g.
 // `secret set`/`secret get`/`secret rm` for plain secrets, the namespace-
-// independent `get`/`run`, or the `oauth set`/`get`/`rm` group) does its
+// explicit `get`/`run` (each takes a `secret.`/`oauth.` prefix), or the
+// `oauth set`/`get`/`rm` group) does its
 // Keychain work and exits before any AppKit run loop starts, so no window
 // is shown.
 //
@@ -428,8 +429,9 @@ extension Keymaster {
   // Manage plain (non-OAuth) Keychain secrets (the dev.mnck.* namespace). `set`
   // stores a secret read from stdin, `get` prints the stored value (Touch ID), and
   // `rm` removes it (Touch ID) — all scoped to the plain store only. This is the
-  // namespace-DEPENDENT CRUD group; the namespace-independent resolver is the
-  // top-level `keymaster get` (which also mints OAuth tokens). `secret get` is the
+  // namespace-DEPENDENT CRUD group; the namespace-explicit resolver is the
+  // top-level `keymaster get` (which takes a `secret.`/`oauth.` prefix and also mints
+  // OAuth tokens). `secret get` is the
   // plain-only analogue of `oauth get`: a pure read that never mints and never
   // consults the OAuth namespace, so an OAuth name yields a plain "not found".
   struct Secret: ParsableCommand {
