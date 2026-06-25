@@ -442,12 +442,10 @@ extension Keymaster.Secret {
       }
       let keychain = SystemKeychain()
       do {
-        // Symmetric cross-namespace guard: a name lives in exactly one store, so if this
-        // name already holds an OAuth record, refuse rather than overwrite it. `storeSecret`
-        // runs a no-prompt `exists` probe of the OAuth namespace FIRST and throws
-        // `.crossNamespaceConflict` (naming the `oauth rm` command) without writing anything;
-        // otherwise it upserts the plain secret as today.
-        try storeSecret(Data(secret.utf8), name: key, in: .secret, conflictingWith: .oauth, backend: keychain)
+        // A plain upsert. Duplicates across namespaces are allowed, so this does not
+        // consult the OAuth namespace — `storeSecret` enforces only the write-time NUL
+        // guard; a name holding an OAuth record may also hold a plain secret.
+        try storeSecret(Data(secret.utf8), name: key, in: .secret, backend: keychain)
       } catch let error as KeychainError {
         fail(error.message)
       } catch {
@@ -549,9 +547,9 @@ extension Keymaster.OAuth {
   // and refresh_token with echo off); otherwise the record is read as JSON from
   // stdin. The record is validated, then upserted as canonical JSON via
   // SecretManager on the .oauth store — a first create does not prompt, an overwrite
-  // prompts via the upsert's authenticated read. If the name already exists as a
-  // plain secret, `storeSecret` refuses (a name lives in exactly one store) and tells
-  // you to `keymaster secret rm` it first, writing nothing.
+  // prompts via the upsert's authenticated read. Duplicates across namespaces are
+  // allowed, so this does not consult the plain namespace: the same name may also
+  // hold a plain secret.
   struct Set: ParsableCommand {
     static let configuration = CommandConfiguration(
       abstract: "Store an OAuth record read from prompts (TTY) or JSON on stdin."
@@ -568,11 +566,10 @@ extension Keymaster.OAuth {
       do {
         try record.validate()
         let encoded = try record.encoded()
-        // A name lives in exactly one store, so if this name already holds a plain secret,
-        // refuse rather than overwrite it. `storeSecret` runs a no-prompt `exists` probe of
-        // the plain namespace FIRST and throws `.crossNamespaceConflict` (naming the
-        // `secret rm` command) without writing anything; otherwise it upserts the OAuth record as today.
-        try storeSecret(encoded, name: name, in: .oauth, conflictingWith: .secret, backend: keychain)
+        // A plain upsert. Duplicates across namespaces are allowed, so this does not
+        // consult the plain namespace — `storeSecret` enforces only the write-time NUL
+        // guard; a name holding a plain secret may also hold an OAuth record.
+        try storeSecret(encoded, name: name, in: .oauth, backend: keychain)
       } catch let error as KeychainError {
         fail(error.message)
       } catch {
