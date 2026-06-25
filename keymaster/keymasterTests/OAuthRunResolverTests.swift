@@ -138,8 +138,8 @@ struct OAuthRunResolverTests {
     let manager = OAuthManager(backend: backend, exchanger: FakeTokenExchanger())
     let result = try manager.resolveRunEnvironment(
       mappings: [
-        KeyMapping(env: "A", key: "a"),
-        KeyMapping(env: "B", key: "b")
+        KeyMapping(env: "A", key: "a", namespace: .secret),
+        KeyMapping(env: "B", key: "b", namespace: .secret)
       ],
       reason: "Run \"x\" with keychain secrets: \"a\", \"b\""
     )
@@ -173,8 +173,8 @@ struct OAuthRunResolverTests {
     let manager = OAuthManager(backend: backend, exchanger: exchanger)
     let result = try manager.resolveRunEnvironment(
       mappings: [
-        KeyMapping(env: "PLAIN", key: "plain"),
-        KeyMapping(env: "TOKEN", key: "oauthkey")
+        KeyMapping(env: "PLAIN", key: "plain", namespace: .secret),
+        KeyMapping(env: "TOKEN", key: "oauthkey", namespace: .oauth)
       ],
       reason: "batch"
     )
@@ -202,7 +202,7 @@ struct OAuthRunResolverTests {
     ))
     let manager = OAuthManager(backend: backend, exchanger: exchanger)
     _ = try manager.resolveRunEnvironment(
-      mappings: [KeyMapping(env: "TOKEN", key: "oauthkey")],
+      mappings: [KeyMapping(env: "TOKEN", key: "oauthkey", namespace: .oauth)],
       reason: "batch"
     )
     // existsUsing(.oauth) + readUsing(.oauth) + updateUsing(.oauth) each recorded a
@@ -229,8 +229,8 @@ struct OAuthRunResolverTests {
     #expect(throws: KeychainError.status("a: item not found")) {
       _ = try manager.resolveRunEnvironment(
         mappings: [
-          KeyMapping(env: "A", key: "a"),
-          KeyMapping(env: "B", key: "b")
+          KeyMapping(env: "A", key: "a", namespace: .secret),
+          KeyMapping(env: "B", key: "b", namespace: .secret)
         ],
         reason: "reason"
       )
@@ -252,8 +252,8 @@ struct OAuthRunResolverTests {
     #expect(throws: KeychainError.status("a: no secret or OAuth record found in the keychain")) {
       _ = try manager.resolveRunEnvironment(
         mappings: [
-          KeyMapping(env: "A", key: "a"),
-          KeyMapping(env: "B", key: "b")
+          KeyMapping(env: "A", key: "a", namespace: .secret),
+          KeyMapping(env: "B", key: "b", namespace: .secret)
         ],
         reason: "reason"
       )
@@ -282,8 +282,8 @@ struct OAuthRunResolverTests {
     )) {
       _ = try manager.resolveRunEnvironment(
         mappings: [
-          KeyMapping(env: "TOKEN", key: "oauthkey"),
-          KeyMapping(env: "PLAIN", key: "plain")
+          KeyMapping(env: "TOKEN", key: "oauthkey", namespace: .oauth),
+          KeyMapping(env: "PLAIN", key: "plain", namespace: .secret)
         ],
         reason: "reason"
       )
@@ -304,7 +304,7 @@ struct OAuthRunResolverTests {
       "a: secret contains a NUL byte and cannot be used as an environment variable"
     )) {
       _ = try manager.resolveRunEnvironment(
-        mappings: [KeyMapping(env: "A", key: "a")],
+        mappings: [KeyMapping(env: "A", key: "a", namespace: .secret)],
         reason: "reason"
       )
     }
@@ -332,8 +332,8 @@ struct OAuthRunResolverTests {
     let manager = OAuthManager(backend: backend, exchanger: exchanger)
     let result = try manager.resolveRunEnvironment(
       mappings: [
-        KeyMapping(env: "DUP", key: "plain"),
-        KeyMapping(env: "DUP", key: "oauthkey")
+        KeyMapping(env: "DUP", key: "plain", namespace: .secret),
+        KeyMapping(env: "DUP", key: "oauthkey", namespace: .oauth)
       ],
       reason: "reason"
     )
@@ -353,7 +353,7 @@ struct OAuthRunResolverTests {
     ))
     let manager = OAuthManager(backend: backend, exchanger: exchanger)
     let result = try manager.resolveRunEnvironment(
-      mappings: [KeyMapping(env: "TOKEN", key: "oauthkey")],
+      mappings: [KeyMapping(env: "TOKEN", key: "oauthkey", namespace: .oauth)],
       reason: "reason"
     )
     #expect(result.env == ["TOKEN": "at-still-good"])
@@ -386,8 +386,8 @@ struct OAuthRunResolverTests {
     let manager = OAuthManager(backend: backend, exchanger: exchanger)
     let result = try manager.resolveRunEnvironment(
       mappings: [
-        KeyMapping(env: "T1", key: "k1"),
-        KeyMapping(env: "T2", key: "k2")
+        KeyMapping(env: "T1", key: "k1", namespace: .oauth),
+        KeyMapping(env: "T2", key: "k2", namespace: .oauth)
       ],
       reason: "reason"
     )
@@ -405,7 +405,7 @@ struct OAuthRunResolverTests {
     let manager = OAuthManager(backend: backend, exchanger: FakeTokenExchanger())
     #expect(throws: KeychainError.status("Authentication failed or was canceled")) {
       _ = try manager.resolveRunEnvironment(
-        mappings: [KeyMapping(env: "A", key: "a")],
+        mappings: [KeyMapping(env: "A", key: "a", namespace: .secret)],
         reason: "reason"
       )
     }
