@@ -106,9 +106,23 @@ struct RunSupportTests {
   }
 
   @Test func parseRejectsEmptyKeyViaNamespacedParser() {
-    // A valid prefix but empty key in the spec surfaces the namespaced parser's error.
-    #expect(throws: NamespacedKeyError.emptyKey("secret.")) {
+    // A valid prefix but empty key in the spec surfaces the namespaced parser's error,
+    // re-tagged with the FULL --key argument (not the bare "secret." spec) so the
+    // message names what the user typed.
+    #expect(throws: NamespacedKeyError.emptyKey("ENV=secret.")) {
       _ = try parseKeyMapping("ENV=secret.")
+    }
+  }
+
+  @Test func parseReTagsSpecErrorWithFullArgument() {
+    // The right side of `ENV=spec` is parsed alone, but the error must echo the whole
+    // argument so a malformed --key among several can be identified (and `--key TOKEN=`
+    // never reports the contextless `invalid key ""`).
+    #expect(throws: NamespacedKeyError.unknownNamespace("TOKEN=bogus.GitHub", prefix: "bogus")) {
+      _ = try parseKeyMapping("TOKEN=bogus.GitHub")
+    }
+    #expect(throws: NamespacedKeyError.missingNamespace("TOKEN=")) {
+      _ = try parseKeyMapping("TOKEN=")
     }
   }
 

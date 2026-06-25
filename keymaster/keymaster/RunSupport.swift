@@ -45,6 +45,23 @@ enum NamespacedKeyError: Error, Equatable, CustomStringConvertible {
       return "invalid key \"\(raw)\": key name is empty — use secret.NAME or oauth.NAME"
     }
   }
+
+  // Re-tag the displayed key with a different raw string. Used when the parsed
+  // key-spec is the RIGHT side of a `--key ENV=spec` argument: `parseNamespacedKey`
+  // only saw `spec`, but the user typed the whole `ENV=spec`, so the error echoes the
+  // full argument instead of the bare spec — otherwise `--key TOKEN=` reports `invalid
+  // key ""` and a malformed key among several `--key`s can't be identified. The
+  // detail (the bad `prefix`, the missing/empty distinction) is preserved.
+  func reTagged(with raw: String) -> NamespacedKeyError {
+    switch self {
+    case .missingNamespace:
+      return .missingNamespace(raw)
+    case .unknownNamespace(_, let prefix):
+      return .unknownNamespace(raw, prefix: prefix)
+    case .emptyKey:
+      return .emptyKey(raw)
+    }
+  }
 }
 
 // Parse a namespaced key into its (namespace, bare key) parts.
@@ -107,8 +124,14 @@ func parseKeyMapping(_ raw: String) throws -> KeyMapping {
   let env = String(raw[raw.startIndex..<equals])
   guard !env.isEmpty else { throw KeyMappingError.emptyName(raw) }
   let spec = String(raw[raw.index(after: equals)...])
-  let (namespace, key) = try parseNamespacedKey(spec)
-  return KeyMapping(env: env, key: key, namespace: namespace)
+  do {
+    let (namespace, key) = try parseNamespacedKey(spec)
+    return KeyMapping(env: env, key: key, namespace: namespace)
+  } catch let error as NamespacedKeyError {
+    // parseNamespacedKey only saw `spec`; re-tag with the full `--key` argument so the
+    // message names what the user actually typed (e.g. "TOKEN=bogus.X", not "bogus.X").
+    throw error.reTagged(with: raw)
+  }
 }
 
 // Merge `overrides` over `base`, with overrides winning on key collisions. Pure,

@@ -188,8 +188,14 @@ extension Keymaster {
 
     // The namespace prefix is parsed here so a missing/unknown prefix or empty key is
     // rejected before any Touch ID prompt (same validate-then-reparse shape as `Run`).
+    // A parse failure is re-thrown as ValidationError so ArgumentParser renders it with
+    // the usage hint; the parse helpers can't throw it themselves (Foundation-only).
     func validate() throws {
-      _ = try parseNamespacedKey(key)
+      do {
+        _ = try parseNamespacedKey(key)
+      } catch let error as NamespacedKeyError {
+        throw ValidationError(error.description)
+      }
     }
 
     func run() {
@@ -197,11 +203,19 @@ extension Keymaster {
       guard let (namespace, name) = try? parseNamespacedKey(key) else { return }
       let keychain = SystemKeychain()
       let oauth = OAuthManager(backend: keychain, exchanger: URLSessionTokenExchanger())
+      // The prompt names the de-prefixed bare key but describes the actual operation:
+      // a `.secret` key is read, an `.oauth` key is exchanged for a fresh access token
+      // (a mint, not a read), so the user sees what they are authorizing.
+      let reason: String
+      switch namespace {
+      case .secret: reason = "Read keychain secret: \"\(name)\""
+      case .oauth: reason = "Mint access token for: \"\(name)\""
+      }
       do {
         let result = try oauth.resolveSecret(
           name: name,
           namespace: namespace,
-          reason: "Read keychain secret: \"\(name)\""
+          reason: reason
         )
         if result.refreshTokenStale { warnStaleRefreshToken(name) }
         print(result.value)
@@ -271,7 +285,18 @@ extension Keymaster {
       guard !command.isEmpty else {
         throw ValidationError("provide a command after --")
       }
-      for raw in keys { _ = try parseKeyMapping(raw) }
+      // Re-throw a malformed --key as ValidationError so ArgumentParser renders it with
+      // the usage hint (parseKeyMapping can throw either error type; both are Foundation-
+      // only and can't construct a ValidationError themselves).
+      for raw in keys {
+        do {
+          _ = try parseKeyMapping(raw)
+        } catch let error as NamespacedKeyError {
+          throw ValidationError(error.description)
+        } catch let error as KeyMappingError {
+          throw ValidationError(error.description)
+        }
+      }
     }
 
     func run() {
